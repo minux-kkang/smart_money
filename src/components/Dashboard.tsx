@@ -420,83 +420,84 @@ export const Dashboard: React.FC<DashboardProps> = ({
     selectedIds.size > 0 && selectedIds.size < filteredTransactions.length;
 
   return (
-    <div className="space-y-6">
-      {/* 1. Monthly Summary Stat Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
-        {/* Total Expense */}
-        <div className="p-3 sm:p-5 bg-white rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+    <div className="space-y-4 sm:space-y-6">
+      {/* 1. Monthly Summary (Consolidated, Zero-Waste High-Density Layout) */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
+        {/* Primary Row: Balance & Key Financial Metrics */}
+        <div className="p-3.5 sm:p-4 bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
-              {activeSheetTitle} 지출
-            </p>
-            <h4 className="text-base sm:text-2xl font-black text-rose-600 mt-0.5 sm:mt-1 truncate">
-              {metrics.totalExpense.toLocaleString('ko-KR')}원
-            </h4>
-            <p className="text-[10px] sm:text-[11px] font-semibold text-slate-400 mt-0.5 truncate hidden xs:block">
-              일 평균 {metrics.dailyAverageExpense.toLocaleString('ko-KR')}원
-            </p>
-          </div>
-          <div className="w-8 h-8 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl bg-rose-50 flex items-center justify-center text-rose-600 shrink-0 self-end sm:self-auto">
-            <TrendingDown className="w-4 h-4 sm:w-6 sm:h-6" />
-          </div>
-        </div>
-
-        {/* Total Income */}
-        <div className="p-3 sm:p-5 bg-white rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
-              {activeSheetTitle} 수입
-            </p>
-            <h4 className="text-base sm:text-2xl font-black text-emerald-600 mt-0.5 sm:mt-1 truncate">
-              {metrics.totalIncome.toLocaleString('ko-KR')}원
-            </h4>
-            <p className="text-[10px] sm:text-[11px] font-semibold text-slate-400 mt-0.5 truncate hidden xs:block">
-              저축률 {metrics.savingRate}%
-            </p>
-          </div>
-          <div className="w-8 h-8 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 shrink-0 self-end sm:self-auto">
-            <TrendingUp className="w-4 h-4 sm:w-6 sm:h-6" />
-          </div>
-        </div>
-
-        {/* Net Balance */}
-        <div className="p-3 sm:p-5 bg-white rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
-              이달 잔액
-            </p>
-            <h4
-              className={`text-base sm:text-2xl font-black mt-0.5 sm:mt-1 truncate ${
-                metrics.balance >= 0 ? 'text-blue-600' : 'text-rose-600'
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-xs text-slate-300 font-bold">{activeSheetTitle} 잔액</span>
+              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-white/10 text-slate-300">
+                수입 - 지출
+              </span>
+              <span className="text-[10px] font-semibold text-slate-400">
+                ({metrics.count}건 기록)
+              </span>
+            </div>
+            <div
+              className={`text-xl sm:text-2xl font-black mt-0.5 tracking-tight ${
+                metrics.balance >= 0 ? 'text-emerald-400' : 'text-rose-400'
               }`}
             >
               {metrics.balance >= 0 ? '+' : ''}
-              {metrics.balance.toLocaleString('ko-KR')}원
-            </h4>
-            <p className="text-[10px] sm:text-[11px] font-semibold text-slate-400 mt-0.5 truncate hidden xs:block">
-              수입 대비 차액
-            </p>
+              {metrics.balance.toLocaleString('ko-KR')}
+              <span className="text-xs font-normal text-slate-300 ml-1">원</span>
+            </div>
           </div>
-          <div className="w-8 h-8 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 shrink-0 self-end sm:self-auto">
-            <PiggyBank className="w-4 h-4 sm:w-6 sm:h-6" />
+
+          <div className="flex items-center gap-2 sm:gap-3 text-right shrink-0">
+            <div className="hidden xs:block">
+              <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium">일 평균 지출</span>
+              <span className="text-xs sm:text-sm font-bold text-slate-200">
+                {metrics.dailyAverageExpense.toLocaleString('ko-KR')}원
+              </span>
+            </div>
+            <div className="pl-2 border-l border-white/15">
+              <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium">저축/잉여율</span>
+              <span className="text-xs sm:text-sm font-black text-blue-300">
+                {metrics.savingRate}%
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* Transaction Count */}
-        <div className="p-3 sm:p-5 bg-white rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
-              기록 건수
-            </p>
-            <h4 className="text-base sm:text-2xl font-black text-slate-900 mt-0.5 sm:mt-1 truncate">
-              {metrics.count}건
-            </h4>
-            <p className="text-[10px] sm:text-[11px] font-semibold text-slate-400 mt-0.5 truncate hidden xs:block">
-              {isRealGoogleConnected ? '실시간 연동' : '샘플 모드'}
-            </p>
+        {/* 2 Key Pillars: 총 지출 & 총 수입 */}
+        <div className="grid grid-cols-2 divide-x divide-slate-150 bg-slate-50/80 py-2.5 px-1 sm:px-3">
+          {/* 지출 */}
+          <div className="px-2.5 sm:px-4 py-1 flex items-center justify-between min-w-0">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
+                <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">
+                  {activeSheetTitle} 총 지출
+                </span>
+              </div>
+              <p className="text-sm sm:text-lg font-black text-rose-600 truncate mt-0.5">
+                {metrics.totalExpense.toLocaleString('ko-KR')}원
+              </p>
+            </div>
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 ml-1.5 shadow-2xs">
+              <TrendingDown className="w-4 h-4 stroke-[2.5]" />
+            </div>
           </div>
-          <div className="w-8 h-8 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl bg-slate-100 flex items-center justify-center text-slate-700 shrink-0 self-end sm:self-auto">
-            <Calendar className="w-4 h-4 sm:w-6 sm:h-6" />
+
+          {/* 수입 */}
+          <div className="px-2.5 sm:px-4 py-1 flex items-center justify-between min-w-0">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">
+                  {activeSheetTitle} 총 수입
+                </span>
+              </div>
+              <p className="text-sm sm:text-lg font-black text-emerald-600 truncate mt-0.5">
+                {metrics.totalIncome.toLocaleString('ko-KR')}원
+              </p>
+            </div>
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0 ml-1.5 shadow-2xs">
+              <TrendingUp className="w-4 h-4 stroke-[2.5]" />
+            </div>
           </div>
         </div>
       </div>

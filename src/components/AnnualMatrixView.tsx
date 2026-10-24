@@ -48,113 +48,140 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
 
   return (
     <div className="space-y-4 sm:space-y-6">
-      {/* 2026 Annual Overview Summary Cards */}
-      <div className="grid grid-cols-1 xs:grid-cols-3 gap-2.5 sm:gap-4">
-        <div className="p-3 sm:p-5 rounded-xl sm:rounded-2xl bg-white border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between mb-1 sm:mb-2">
-            <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">연간 총 수입</span>
-            <div className="p-1 sm:p-1.5 rounded-lg bg-emerald-100 text-emerald-700 shrink-0">
-              <TrendingUp className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+      {/* 2026 Annual Overview Summary Card (Consolidated & Zero Waste) */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
+        {/* Main Row: Annual Net Balance */}
+        <div className="p-3.5 sm:p-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-xs text-slate-300 font-bold">2026 연간 누적 잔액</span>
+              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-blue-500/30 text-blue-200">
+                연간 저축률 {savingRate}%
+              </span>
+            </div>
+            <div
+              className={`text-xl sm:text-2xl font-black mt-0.5 tracking-tight ${
+                balance >= 0 ? 'text-blue-400' : 'text-rose-400'
+              }`}
+            >
+              {balance >= 0 ? '+' : ''}
+              {balance.toLocaleString('ko-KR')}
+              <span className="text-xs font-normal text-slate-300 ml-1">원</span>
             </div>
           </div>
-          <div className="text-base sm:text-2xl font-black text-slate-900 tracking-tight truncate">
-            {yearData.totalIncome.toLocaleString('ko-KR')}
-            <span className="text-[11px] sm:text-xs font-semibold text-slate-500 ml-0.5">원</span>
+
+          <div className="text-right text-xs shrink-0">
+            <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium">집계 기준</span>
+            <span className="text-xs sm:text-sm font-bold text-slate-200">2026 Dashboard</span>
           </div>
-          <p className="mt-0.5 text-[10px] sm:text-xs text-slate-400 font-medium truncate hidden xs:block">
-            Dashboard 기준
-          </p>
         </div>
 
-        <div className="p-3 sm:p-5 rounded-xl sm:rounded-2xl bg-white border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between mb-1 sm:mb-2">
-            <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">연간 총 지출</span>
-            <div className="p-1 sm:p-1.5 rounded-lg bg-rose-100 text-rose-700 shrink-0">
-              <TrendingDown className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+        {/* 2 Pillars: 연간 총 수입 vs 연간 총 지출 */}
+        <div className="grid grid-cols-2 divide-x divide-slate-150 bg-slate-50/80 py-2.5 px-1 sm:px-3">
+          {/* 총 수입 */}
+          <div className="px-2.5 sm:px-4 py-1 flex items-center justify-between min-w-0">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">
+                  2026 총 수입
+                </span>
+              </div>
+              <p className="text-sm sm:text-lg font-black text-emerald-600 truncate mt-0.5">
+                {yearData.totalIncome.toLocaleString('ko-KR')}원
+              </p>
+            </div>
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 ml-1.5 shadow-2xs">
+              <TrendingUp className="w-4 h-4 stroke-[2.5]" />
             </div>
           </div>
-          <div className="text-base sm:text-2xl font-black text-rose-600 tracking-tight truncate">
-            {yearData.totalExpense.toLocaleString('ko-KR')}
-            <span className="text-[11px] sm:text-xs font-semibold text-slate-500 ml-0.5">원</span>
-          </div>
-          <p className="mt-0.5 text-[10px] sm:text-xs text-slate-400 font-medium truncate hidden xs:block">
-            1~12월 누적 지출
-          </p>
-        </div>
 
-        <div className="p-3 sm:p-5 rounded-xl sm:rounded-2xl bg-white border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between mb-1 sm:mb-2">
-            <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">누적 잔액</span>
-            <div className="p-1 sm:p-1.5 rounded-lg bg-blue-100 text-blue-700 shrink-0">
-              <PiggyBank className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+          {/* 총 지출 */}
+          <div className="px-2.5 sm:px-4 py-1 flex items-center justify-between min-w-0">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
+                <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">
+                  2026 총 지출
+                </span>
+              </div>
+              <p className="text-sm sm:text-lg font-black text-rose-600 truncate mt-0.5">
+                {yearData.totalExpense.toLocaleString('ko-KR')}원
+              </p>
             </div>
-          </div>
-          <div className="text-base sm:text-2xl font-black text-blue-600 tracking-tight truncate">
-            {balance.toLocaleString('ko-KR')}
-            <span className="text-[11px] sm:text-xs font-semibold text-slate-500 ml-0.5">원</span>
-          </div>
-          <div className="mt-0.5 flex items-center gap-1 text-[10px] sm:text-xs">
-            <span className="text-slate-400 hidden xs:inline">저축률:</span>
-            <span className="font-bold text-blue-700 bg-blue-100 px-1.5 py-0.2 rounded">
-              {savingRate}%
-            </span>
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center shrink-0 ml-1.5 shadow-2xs">
+              <TrendingDown className="w-4 h-4 stroke-[2.5]" />
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Monthly Expenditure Bar Trends */}
-      <div className="p-5 sm:p-6 bg-white rounded-2xl border border-slate-200 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+      {/* Monthly Expenditure Bar Trends (Isolated & Never Overlapping) */}
+      <div className="p-4 sm:p-6 bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
           <div>
-            <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-blue-600" />
+            <h3 className="text-sm font-black text-slate-900 flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-blue-600 shrink-0" />
               <span>2026년 월별 총 지출 추이 (1월 ~ 12월)</span>
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              각 월 바를 클릭하면 해당 월의 세부 내역으로 즉시 이동합니다.
+              각 월 막대를 클릭하면 해당 월의 가계부로 즉시 이동합니다.
             </p>
           </div>
-          <span className="text-xs font-bold text-slate-600">
-            최고 지출: 9월 ({Math.max(...monthlyTotals).toLocaleString('ko-KR')}원)
-          </span>
+          <div className="flex items-center gap-2 self-start sm:self-auto">
+            <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200/80">
+              최고 지출: 9월 ({Math.max(...monthlyTotals).toLocaleString('ko-KR')}원)
+            </span>
+          </div>
         </div>
 
-        {/* Visual Monthly Bars */}
-        <div className="grid grid-cols-6 sm:grid-cols-12 gap-2 pt-4 pb-2 items-end h-44">
-          {months.map((m, idx) => {
-            const amt = monthlyTotals[idx];
-            const max = Math.max(...monthlyTotals, 1);
-            const heightPercent = Math.max(Math.round((amt / max) * 100), 4);
-            const isFilled = amt > 0;
+        {/* Visual Monthly Bars: 12 months in a single chronological row with horizontal scroll on narrow screens */}
+        <div className="overflow-x-auto pb-2 pt-2 scrollbar-none">
+          <div className="min-w-[480px] sm:min-w-0 grid grid-cols-12 gap-1.5 sm:gap-2.5 items-end h-40">
+            {months.map((m, idx) => {
+              const amt = monthlyTotals[idx];
+              const max = Math.max(...monthlyTotals, 1);
+              const heightPercent = Math.max(Math.round((amt / max) * 100), 5);
+              const isFilled = amt > 0;
+              const isMax = amt === Math.max(...monthlyTotals);
 
-            return (
-              <button
-                key={m}
-                onClick={() => onSelectMonth && onSelectMonth(m)}
-                className="group flex flex-col items-center h-full justify-end cursor-pointer"
-                title={`${m}: ${amt.toLocaleString('ko-KR')}원 (클릭하여 해당 월 보기)`}
-              >
-                <span className="text-[10px] font-bold text-slate-500 mb-1 group-hover:text-blue-600 transition truncate max-w-full">
-                  {amt > 0 ? `${(amt / 10000).toFixed(0)}만` : '-'}
-                </span>
-                <div className="w-full bg-slate-100 rounded-t-lg overflow-hidden flex items-end h-28 group-hover:bg-slate-200 transition">
-                  <div
-                    style={{ height: `${heightPercent}%` }}
-                    className={`w-full rounded-t-lg transition-all duration-300 ${
-                      isFilled
-                        ? idx === 8
-                          ? 'bg-indigo-600 group-hover:bg-indigo-700'
-                          : 'bg-blue-600 group-hover:bg-blue-700'
-                        : 'bg-slate-300'
+              return (
+                <button
+                  key={m}
+                  onClick={() => onSelectMonth && onSelectMonth(m)}
+                  className="group flex flex-col items-center h-full justify-end cursor-pointer transition active:scale-95"
+                  title={`${m}: ${amt.toLocaleString('ko-KR')}원 (클릭하여 ${m} 가계부 보기)`}
+                >
+                  <span
+                    className={`text-[10px] font-bold mb-1 transition truncate max-w-full ${
+                      isMax ? 'text-indigo-600 font-extrabold' : 'text-slate-500'
                     }`}
-                  />
-                </div>
-                <span className="text-xs font-extrabold text-slate-800 mt-1.5 group-hover:text-blue-600">
-                  {m}
-                </span>
-              </button>
-            );
-          })}
+                  >
+                    {amt > 0 ? `${(amt / 10000).toFixed(0)}만` : '-'}
+                  </span>
+                  <div className="w-full bg-slate-100 rounded-t-lg overflow-hidden flex items-end h-24 group-hover:bg-slate-200 transition">
+                    <div
+                      style={{ height: `${heightPercent}%` }}
+                      className={`w-full rounded-t-lg transition-all duration-300 ${
+                        isFilled
+                          ? isMax
+                            ? 'bg-gradient-to-t from-indigo-700 to-indigo-500 group-hover:from-indigo-800 group-hover:to-indigo-600'
+                            : 'bg-gradient-to-t from-blue-600 to-sky-500 group-hover:from-blue-700 group-hover:to-sky-600'
+                          : 'bg-slate-200'
+                      }`}
+                    />
+                  </div>
+                  <span
+                    className={`text-xs font-black mt-1.5 transition ${
+                      isMax ? 'text-indigo-700 font-black' : 'text-slate-700 group-hover:text-blue-600'
+                    }`}
+                  >
+                    {m}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
