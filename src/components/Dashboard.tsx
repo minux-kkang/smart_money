@@ -23,10 +23,17 @@ import {
   Layers,
   Package,
   ListPlus,
+  Plus,
+  RotateCcw,
+  ArrowLeftRight,
+  FileText,
+  Sparkles,
+  ArrowRight,
+  Info,
 } from 'lucide-react';
 import { Transaction, TransactionType, formatShortDate, SubItem } from '../types/ledger';
 import { SubItemModal } from './SubItemModal';
-import { saveSubItemsForTransaction } from '../services/subItemStorage';
+import { saveSubItemsForTransaction, serializeSubItemsToMemo } from '../services/subItemStorage';
 
 interface DashboardProps {
   transactions: Transaction[];
@@ -135,9 +142,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [isBatchDeleteModalOpen, setIsBatchDeleteModalOpen] = useState(false);
   const [isProcessingDelete, setIsProcessingDelete] = useState(false);
 
-  // Edit Modal State
+  // Edit Modal State (Synchronized with ExpenseInputForm)
   const [editModalTx, setEditModalTx] = useState<Transaction | null>(null);
   const [editForm, setEditForm] = useState<Partial<Transaction>>({});
+  const [editAmountStr, setEditAmountStr] = useState<string>('');
+  const [editSubItems, setEditSubItems] = useState<SubItem[]>([]);
+  const [showEditSubItemEntry, setShowEditSubItemEntry] = useState<boolean>(false);
+  const [customCategoryInput, setCustomCategoryInput] = useState<boolean>(false);
+  const [newCategoryText, setNewCategoryText] = useState<string>('');
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
 
   // Sub-Item Breakdown Modal State (Coupang, Mart, etc.)
@@ -154,6 +166,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
         memo: updatedTx.memo,
         subItems: updatedTx.subItems,
       }));
+      setEditAmountStr(updatedTx.amount.toLocaleString('ko-KR'));
+      setEditSubItems(updatedTx.subItems ? updatedTx.subItems.map((s) => ({ ...s })) : []);
     }
     setSubItemModalTx(null);
   };
@@ -325,7 +339,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     setSelectedIds(next);
   };
 
-  // Open Edit Modal
+  // Open Edit Modal with full synchronization
   const handleOpenEditModal = (t: Transaction) => {
     setEditModalTx(t);
     setEditForm({
@@ -337,33 +351,147 @@ export const Dashboard: React.FC<DashboardProps> = ({
       paymentMethod: t.paymentMethod,
       memo: t.memo,
     });
+    setEditAmountStr(t.amount > 0 ? t.amount.toLocaleString('ko-KR') : '');
+    setEditSubItems(t.subItems ? t.subItems.map((s) => ({ ...s })) : []);
+    setShowEditSubItemEntry(!!(t.subItems && t.subItems.length > 0));
+    setCustomCategoryInput(false);
+    setNewCategoryText('');
+  };
+
+  const handleEditAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value.replace(/[^0-9]/g, '');
+    if (!raw) {
+      setEditAmountStr('');
+      setEditForm((prev) => ({ ...prev, amount: 0 }));
+      return;
+    }
+    const num = parseInt(raw, 10);
+    setEditAmountStr(num.toLocaleString('ko-KR'));
+    setEditForm((prev) => ({ ...prev, amount: num }));
+  };
+
+  const handleEditAddAmount = (addVal: number) => {
+    const current = Number(editForm.amount) || 0;
+    const next = current + addVal;
+    setEditAmountStr(next.toLocaleString('ko-KR'));
+    setEditForm((prev) => ({ ...prev, amount: next }));
+  };
+
+  const handleSetEditQuickDate = (offsetDays: number) => {
+    const d = new Date();
+    d.setDate(d.getDate() - offsetDays);
+    const dateStr = d.toISOString().slice(0, 10);
+    setEditForm((prev) => ({ ...prev, date: dateStr }));
+  };
+
+  const handleAddEditSubItem = () => {
+    setEditSubItems((prev) => [
+      ...prev,
+      {
+        id: `edit-sub-${Date.now()}-${prev.length}`,
+        name: '',
+        amount: 0,
+        category: editForm.category || '식비',
+      },
+    ]);
+  };
+
+  const handleUpdateEditSubItem = (id: string, field: keyof SubItem, value: any) => {
+    setEditSubItems((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+    );
+  };
+
+  const handleRemoveEditSubItem = (id: string) => {
+    setEditSubItems((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const editSubItemsSum = useMemo(() => {
+    return editSubItems.reduce((acc, item) => acc + (Number(item.amount) || 0), 0);
+  }, [editSubItems]);
+
+  const handleSyncEditAmountWithSubItems = () => {
+    if (editSubItemsSum > 0) {
+      setEditAmountStr(editSubItemsSum.toLocaleString('ko-KR'));
+      setEditForm((prev) => ({ ...prev, amount: editSubItemsSum }));
+    }
+  };
+
+  const applyEditPreset = (presetType: 'coupang' | 'mart') => {
+    if (presetType === 'coupang') {
+      const items = [
+        { id: `edit-p1`, name: '신선란 30구', amount: 8900, category: '식비' },
+        { id: `edit-p2`, name: '서울우유 2.3L', amount: 6450, category: '식비' },
+        { id: `edit-p3`, name: '롤화장지 30롤', amount: 19800, category: '생활용품' },
+      ];
+      setEditSubItems(items);
+      const total = items.reduce((a, b) => a + b.amount, 0);
+      setEditAmountStr(total.toLocaleString('ko-KR'));
+      setEditForm((prev) => ({ ...prev, amount: total }));
+    } else {
+      const items = [
+        { id: `edit-p1`, name: '소고기 등심 300g', amount: 28000, category: '식비' },
+        { id: `edit-p2`, name: '양파 & 대파', amount: 6500, category: '식비' },
+        { id: `edit-p3`, name: '주방세제 리필', amount: 7500, category: '생활용품' },
+      ];
+      setEditSubItems(items);
+      const total = items.reduce((a, b) => a + b.amount, 0);
+      setEditAmountStr(total.toLocaleString('ko-KR'));
+      setEditForm((prev) => ({ ...prev, amount: total }));
+    }
   };
 
   // Submit Edit to Google Sheets
   const handleSaveEdit = async () => {
     if (!editModalTx) return;
+    const numAmount =
+      typeof editForm.amount === 'number' && editForm.amount > 0
+        ? editForm.amount
+        : parseInt(editAmountStr.replace(/[^0-9]/g, ''), 10) || 0;
+
     if (!editForm.description?.trim()) {
       alert('내용/사용처를 입력해 주세요.');
       return;
     }
-    if (!editForm.amount || editForm.amount <= 0) {
+    if (!numAmount || numAmount <= 0) {
       alert('금액을 올바르게 입력해 주세요.');
       return;
     }
 
     setIsSubmittingEdit(true);
     try {
+      const validSubItems = editSubItems
+        .filter((item) => item.name.trim().length > 0 || item.amount > 0)
+        .map((item) => ({
+          ...item,
+          name: item.name.trim() || '품목',
+          amount: Math.max(0, Number(item.amount) || 0),
+          category: item.category || editForm.category || '식비',
+        }));
+
+      // Extract existing user memo without old serialized sub-items
+      const cleanBaseMemo = (editForm.memo || '')
+        .replace(/\[세부품목:[\s\S]*?\]/g, '')
+        .trim();
+
+      const finalMemo =
+        validSubItems.length > 0
+          ? serializeSubItemsToMemo(cleanBaseMemo, validSubItems)
+          : cleanBaseMemo;
+
       const updatedTx: Transaction = {
         ...editModalTx,
         date: editForm.date || editModalTx.date,
         type: editForm.type || editModalTx.type,
         category: editForm.category || editModalTx.category,
         description: editForm.description.trim(),
-        amount: Number(editForm.amount),
+        amount: numAmount,
         paymentMethod: editForm.paymentMethod || '',
-        memo: editForm.memo || '',
+        memo: finalMemo,
+        subItems: validSubItems.length > 0 ? validSubItems : undefined,
       };
 
+      saveSubItemsForTransaction(updatedTx, validSubItems);
       await onEditTransaction(updatedTx);
       setEditModalTx(null);
     } catch (err: any) {
@@ -603,13 +731,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
           {/* Table Header and Actions */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
             <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-black text-slate-900">가계부 내역 상세</h3>
-                <span className="text-xs font-black px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                <h3 className="text-base font-black text-slate-900 whitespace-nowrap">가계부 내역 상세</h3>
+                <span className="text-xs font-black px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap shrink-0">
                   {filteredTransactions.length}건
                 </span>
                 {isRealGoogleConnected && (
-                  <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
+                  <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1 whitespace-nowrap shrink-0">
                     <FileSpreadsheet className="w-3 h-3" />
                     <span>Google 시트 수정/삭제 즉시 반영</span>
                   </span>
@@ -622,12 +750,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
             <div className="flex flex-wrap items-center gap-2">
               {sheetTabs.length > 1 && onSelectSheetTab && (
-                <div className="flex items-center gap-1.5 text-xs">
+                <div className="flex items-center gap-1.5 text-xs whitespace-nowrap shrink-0">
                   <span className="font-bold text-slate-500">시트 탭:</span>
                   <select
                     value={activeSheetTitle}
                     onChange={(e) => onSelectSheetTab(e.target.value)}
-                    className="px-2.5 py-1.5 bg-white border-2 border-blue-200 rounded-xl font-black text-blue-700 shadow-xs cursor-pointer hover:border-blue-400"
+                    className="px-2.5 py-1.5 bg-white border-2 border-blue-200 rounded-xl font-black text-blue-700 shadow-xs cursor-pointer hover:border-blue-400 whitespace-nowrap"
                   >
                     {sheetTabs.map((tab) => (
                       <option key={tab.id} value={tab.title}>
@@ -640,7 +768,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
               <button
                 onClick={handleExportCSV}
-                className="px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border-2 border-slate-200 transition flex items-center gap-1.5 cursor-pointer"
+                className="px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border-2 border-slate-200 transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
                 title="CSV로 내보내기"
               >
                 <Download className="w-3.5 h-3.5 text-slate-600" />
@@ -651,8 +779,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
           {/* Informational Guidance for Sheet Data and Rows */}
           {!isRealGoogleConnected ? (
-            <div className="mt-3 p-3 bg-blue-50/90 border border-blue-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-blue-900">
-              <div className="flex items-center gap-2">
+            <div className="mt-3 p-3 bg-blue-50/90 border border-blue-200 rounded-xl flex items-center justify-between gap-2 text-xs text-blue-900 whitespace-nowrap overflow-x-auto scrollbar-none">
+              <div className="flex items-center gap-2 shrink-0">
                 <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
                 <span>
                   <strong>[{activeSheetTitle}]</strong> 상세 거래 내역 (총 <strong>{filteredTransactions.length}건</strong> 표시 중 / 샘플 모드)
@@ -663,8 +791,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
               </span>
             </div>
           ) : (
-            <div className="mt-3 p-3 bg-emerald-50/90 border border-emerald-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-emerald-900">
-              <div className="flex items-center gap-2">
+            <div className="mt-3 p-3 bg-emerald-50/90 border border-emerald-200 rounded-xl flex items-center justify-between gap-2 text-xs text-emerald-900 whitespace-nowrap overflow-x-auto scrollbar-none">
+              <div className="flex items-center gap-2 shrink-0">
                 <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
                 <span>
                   Google 시트 <strong>[{activeSheetTitle}]</strong> 탭 실시간 연동 (총 <strong>{filteredTransactions.length}건</strong> 로드됨)
@@ -740,7 +868,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <select
               value={selectedTypeFilter}
               onChange={(e) => setSelectedTypeFilter(e.target.value as any)}
-              className="px-2.5 py-1.5 bg-white border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-700 cursor-pointer"
+              className="px-2.5 py-1.5 bg-white border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-700 cursor-pointer whitespace-nowrap shrink-0"
             >
               <option value="all">전체 구분</option>
               <option value="expense">지출만</option>
@@ -753,7 +881,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <select
                 value={selectedCategoryFilter}
                 onChange={(e) => setSelectedCategoryFilter(e.target.value)}
-                className="px-2.5 py-1.5 bg-white border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-700 max-w-[130px] truncate cursor-pointer"
+                className="px-2.5 py-1.5 bg-white border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-700 max-w-[130px] truncate cursor-pointer whitespace-nowrap shrink-0"
               >
                 <option value="all">모든 분류</option>
                 {allCategories.map((cat) => (
@@ -774,7 +902,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   setSortAsc(false);
                 }
               }}
-              className="px-2.5 py-1.5 bg-white hover:bg-slate-50 border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-700 flex items-center gap-1 cursor-pointer"
+              className="px-2.5 py-1.5 bg-white hover:bg-slate-50 border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-700 flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
             >
               <ArrowUpDown className="w-3 h-3 text-slate-500" />
               <span>
@@ -792,7 +920,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   setIsSelectionMode(true);
                 }
               }}
-              className={`px-2.5 py-1.5 border-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition ${
+              className={`px-2.5 py-1.5 border-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap shrink-0 ${
                 isSelectionMode
                   ? 'bg-blue-600 border-blue-600 text-white shadow-xs'
                   : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
@@ -806,9 +934,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
           {/* User Guide Hint */}
           {!isSelectionMode && filteredTransactions.length > 0 && (
-            <div className="pb-1 text-[11px] text-slate-600 flex items-center justify-between">
-              <span>💡 내역을 <strong>길게 누르면</strong> 다중 선택 모드가 켜집니다.</span>
-              <span className="hidden sm:inline">내역을 클릭하면 바로 수정할 수 있습니다.</span>
+            <div className="pb-1 text-[11px] text-slate-600 flex items-center justify-between whitespace-nowrap overflow-x-auto scrollbar-none">
+              <span className="whitespace-nowrap">💡 내역을 <strong>길게 누르면</strong> 다중 선택 모드가 켜집니다.</span>
+              <span className="hidden sm:inline whitespace-nowrap">내역을 클릭하면 바로 수정할 수 있습니다.</span>
             </div>
           )}
 
@@ -858,11 +986,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <table className="w-full table-fixed text-left text-xs border-collapse">
                 <colgroup>
                   {isSelectionMode && <col className="w-8 sm:w-9" />}
-                  <col className="w-13 sm:w-16" />
-                  <col className="hidden sm:table-column sm:w-20 md:w-24" />
+                  <col className="w-16 sm:w-20" />
+                  <col className="hidden sm:table-column sm:w-24 md:w-28" />
                   <col className="w-auto" />
                   <col className="w-24 sm:w-28 md:w-32" />
-                  <col className="hidden md:table-column md:w-24" />
+                  <col className="hidden md:table-column md:w-24 lg:w-28" />
                   <col className="w-14 sm:w-16" />
                 </colgroup>
                 <thead>
@@ -940,7 +1068,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                         {/* 분류 (Category) - visible on sm+ screens */}
                         <td className="py-2 sm:py-2.5 px-2 whitespace-nowrap hidden sm:table-cell">
-                          <span className="font-bold text-slate-700 text-xs px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 block truncate max-w-full">
+                          <span className="font-bold text-slate-700 text-xs px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 block truncate max-w-full whitespace-nowrap">
                             {t.category}
                           </span>
                         </td>
@@ -948,26 +1076,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         {/* 내용 / 사용처 (Description) & 세부 품목 묶음 박스 */}
                         <td className="py-2.5 px-2 sm:px-3 min-w-0 align-top">
                           <div className="flex flex-col min-w-0">
-                            <div className="flex items-center gap-1.5 min-w-0">
+                            <div className="flex items-center gap-1.5 min-w-0 whitespace-nowrap">
                               <span
-                                className="font-bold sm:font-black text-slate-900 text-xs sm:text-sm truncate min-w-0 flex-1"
+                                className="font-bold sm:font-black text-slate-900 text-xs sm:text-sm truncate min-w-0 flex-1 whitespace-nowrap"
                                 title={t.description}
                               >
                                 {t.description}
                               </span>
                               {/* On mobile, show category tag right next to description */}
-                              <span className="sm:hidden text-[9px] font-bold text-slate-500 px-1 py-0.2 rounded bg-slate-100 border border-slate-200 shrink-0 max-w-[55px] truncate">
+                              <span className="sm:hidden text-[9px] font-bold text-slate-500 px-1 py-0.2 rounded bg-slate-100 border border-slate-200 shrink-0 whitespace-nowrap">
                                 {t.category}
                               </span>
                               {t.type === 'income' && (
-                                <span className="text-[9px] font-black text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200 shrink-0">
+                                <span className="text-[9px] font-black text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200 shrink-0 whitespace-nowrap">
                                   수입
                                 </span>
                               )}
                             </div>
 
                             {(t.memo || t.paymentMethod) && (
-                              <span className="text-[10px] text-slate-400 truncate max-w-full mt-0.5">
+                              <span className="text-[10px] text-slate-400 truncate max-w-full mt-0.5 whitespace-nowrap block">
                                 {[t.paymentMethod, t.memo].filter(Boolean).join(' · ')}
                               </span>
                             )}
@@ -979,15 +1107,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   e.stopPropagation();
                                   handleOpenEditModal(t);
                                 }}
-                                className="mt-2 p-2.5 bg-slate-50/90 hover:bg-blue-50/50 border border-slate-200 hover:border-blue-300 rounded-xl space-y-1.5 transition cursor-pointer shadow-xs group/box"
+                                className="mt-2 p-2 sm:p-2.5 bg-slate-50/90 hover:bg-blue-50/50 border border-slate-200 hover:border-blue-300 rounded-xl space-y-1 transition cursor-pointer shadow-xs group/box"
                                 title="클릭하여 항목 수정 화면 열기"
                               >
-                                <div className="flex items-center justify-between text-[11px] font-black text-slate-700 pb-1 border-b border-slate-200/80">
-                                  <span className="flex items-center gap-1.5 text-blue-700">
-                                    <Package className="w-3.5 h-3.5 text-blue-600" />
-                                    <span>세부 품목 ({t.subItems.length}개)</span>
+                                <div className="flex items-center justify-between text-[11px] font-black text-slate-700 pb-1 border-b border-slate-200/80 whitespace-nowrap">
+                                  <span className="flex items-center gap-1.5 text-blue-700 whitespace-nowrap shrink-0">
+                                    <Package className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                                    <span className="whitespace-nowrap">세부 품목 ({t.subItems.length}개)</span>
                                   </span>
-                                  <span className="text-[10px] text-slate-400 group-hover/box:text-blue-600 flex items-center gap-1 font-bold">
+                                  <span className="text-[10px] text-slate-400 group-hover/box:text-blue-600 flex items-center gap-1 font-bold whitespace-nowrap shrink-0">
                                     <Edit2 className="w-2.5 h-2.5" />
                                     <span>수정</span>
                                   </span>
@@ -997,20 +1125,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   {t.subItems.map((sub, sIdx) => (
                                     <div
                                       key={sub.id || sIdx}
-                                      className="flex items-center justify-between text-xs py-0.5 leading-tight"
+                                      className="flex items-center justify-between text-xs py-0.5 leading-tight whitespace-nowrap gap-2"
                                     >
-                                      <div className="flex items-center gap-1.5 min-w-0 pr-2">
+                                      <div className="flex items-center gap-1.5 min-w-0 pr-1 truncate whitespace-nowrap">
                                         <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
-                                        <span className="font-semibold text-slate-800 truncate text-[11px] sm:text-xs">
+                                        <span className="font-semibold text-slate-800 truncate text-[11px] sm:text-xs whitespace-nowrap">
                                           {sub.name}
                                         </span>
                                         {sub.category && sub.category !== t.category && (
-                                          <span className="text-[9px] font-bold text-slate-500 bg-white border border-slate-200 px-1 py-0.1 rounded shrink-0">
+                                          <span className="text-[9px] font-bold text-slate-500 bg-white border border-slate-200 px-1 py-0.1 rounded shrink-0 whitespace-nowrap">
                                             {sub.category}
                                           </span>
                                         )}
                                       </div>
-                                      <span className="font-black text-slate-700 font-mono text-[11px] sm:text-xs shrink-0">
+                                      <span className="font-black text-slate-700 font-mono text-[11px] sm:text-xs shrink-0 whitespace-nowrap">
                                         {sub.amount.toLocaleString('ko-KR')}원
                                       </span>
                                     </div>
@@ -1269,94 +1397,265 @@ export const Dashboard: React.FC<DashboardProps> = ({
         </div>
       )}
 
-      {/* 5. Edit Transaction Modal (Direct Google Sheet Synchronized) */}
+      {/* 5. Edit Transaction Modal (Direct Google Sheet Synchronized & Unified UX) */}
       {editModalTx && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-150 overflow-y-auto">
-          <div className="w-full max-w-lg bg-white rounded-2xl shadow-2xl border-2 border-blue-200 overflow-hidden my-auto">
-            {/* Modal Header */}
-            <div className="p-5 border-b border-blue-100 flex items-center justify-between bg-blue-50/60">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shadow-md shadow-blue-500/20">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-150 overflow-y-auto">
+          <div className="w-full max-w-xl bg-white rounded-2xl shadow-2xl border-2 border-slate-300 overflow-hidden my-auto flex flex-col max-h-[92vh]">
+            {/* Modal Header Banner matching ExpenseInputForm */}
+            <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shrink-0">
                   <Edit2 className="w-5 h-5" />
                 </div>
-                <div>
-                  <h4 className="text-base font-black text-slate-900">가계부 내역 수정</h4>
-                  <p className="text-xs text-blue-700 font-bold flex items-center gap-1.5 mt-0.5">
-                    <span>[{activeSheetTitle}] 시트</span>
-                    {editModalTx.rowIndex && <span>• {editModalTx.rowIndex}행 수정</span>}
-                    {isRealGoogleConnected && <span>• Google Sheets 동기화</span>}
-                  </p>
+                <div className="min-w-0">
+                  <h2 className="text-base font-black tracking-tight whitespace-nowrap">가계부 내역 수정</h2>
+                  <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-300 whitespace-nowrap overflow-x-auto scrollbar-none">
+                    <span className="text-slate-400">[{editModalTx.sheetTitle || activeSheetTitle}] 시트</span>
+                    {editModalTx.rowIndex && (
+                      <>
+                        <span className="text-slate-500">•</span>
+                        <span>{editModalTx.rowIndex}행</span>
+                      </>
+                    )}
+                    {isRealGoogleConnected && (
+                      <>
+                        <span className="text-slate-500">•</span>
+                        <span className="text-emerald-400 font-bold">Google 시트 실시간 반영</span>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
+
               <button
+                type="button"
                 disabled={isSubmittingEdit}
                 onClick={() => setEditModalTx(null)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer shrink-0"
+                title="닫기"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            {/* Modal Form */}
-            <div className="p-6 space-y-4 text-xs">
-              {/* Row 1: Date & Type */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-black text-slate-700 mb-1">거래 일자</label>
+            {/* Modal Form Body */}
+            <div className="p-5 sm:p-6 space-y-4 bg-white overflow-y-auto flex-1">
+              {/* Dynamic target month notification */}
+              <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between gap-2 text-xs text-blue-950 font-bold whitespace-nowrap overflow-x-auto scrollbar-none">
+                <div className="flex items-center gap-2 shrink-0">
+                  <Info className="w-4 h-4 text-blue-600 shrink-0" />
+                  <span>
+                    거래 일자: <strong className="text-blue-900 underline">{formatShortDate(editForm.date || '')}</strong> <span className="text-blue-600 text-[11px] font-normal">({editForm.date})</span>
+                  </span>
+                </div>
+                <span className="px-2 py-0.5 bg-blue-600 text-white rounded-md text-[11px] font-extrabold shrink-0">
+                  {editModalTx.sheetTitle || activeSheetTitle} 시트에 수정 반영
+                </span>
+              </div>
+
+              {/* 1. Date Selection with Quick Buttons */}
+              <div>
+                <label className="block text-xs font-black text-slate-700 mb-1.5 flex items-center gap-1 whitespace-nowrap">
+                  <Calendar className="w-3.5 h-3.5 text-blue-600" />
+                  <span>지출/수입 날짜</span>
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
                   <input
                     type="date"
                     value={editForm.date || ''}
                     onChange={(e) => setEditForm({ ...editForm, date: e.target.value })}
-                    className="w-full p-2.5 bg-slate-50 border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-600 focus:bg-white"
+                    className="flex-1 min-w-[150px] px-3.5 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-xs sm:text-sm font-bold text-slate-900 focus:outline-none focus:border-blue-600"
+                    required
                   />
-                </div>
-
-                <div>
-                  <label className="block font-black text-slate-700 mb-1">구분</label>
-                  <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-xl">
-                    {(['expense', 'income', 'transfer'] as const).map((tType) => (
-                      <button
-                        key={tType}
-                        type="button"
-                        onClick={() => setEditForm({ ...editForm, type: tType })}
-                        className={`py-1.5 text-xs font-black rounded-lg transition cursor-pointer ${
-                          editForm.type === tType
-                            ? tType === 'expense'
-                              ? 'bg-rose-600 text-white shadow-xs'
-                              : tType === 'income'
-                              ? 'bg-emerald-600 text-white shadow-xs'
-                              : 'bg-blue-600 text-white shadow-xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        {tType === 'expense' ? '지출' : tType === 'income' ? '수입' : '이체'}
-                      </button>
-                    ))}
+                  <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
+                    <button
+                      type="button"
+                      onClick={() => handleSetEditQuickDate(0)}
+                      className="px-3 py-2 text-xs font-bold rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition cursor-pointer"
+                    >
+                      오늘
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleSetEditQuickDate(1)}
+                      className="px-3 py-2 text-xs font-bold rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition cursor-pointer"
+                    >
+                      어제
+                    </button>
                   </div>
                 </div>
               </div>
 
-              {/* Row 2: Category with quick chips */}
+              {/* 2. Transaction Type Segmented Pills */}
               <div>
-                <label className="block font-black text-slate-700 mb-1">분류 (카테고리)</label>
+                <label className="block text-xs font-black text-slate-700 mb-1.5 whitespace-nowrap">거래 구분</label>
+                <div className="grid grid-cols-3 gap-2 p-1 bg-slate-100 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setEditForm({ ...editForm, type: 'expense' })}
+                    className={`flex items-center justify-center gap-1.5 py-2 rounded-lg font-bold text-xs sm:text-sm transition cursor-pointer ${
+                      editForm.type === 'expense'
+                        ? 'bg-rose-600 text-white shadow-xs'
+                        : 'text-slate-700 hover:text-slate-900'
+                    }`}
+                  >
+                    <TrendingDown className="w-4 h-4" />
+                    <span>지출</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditForm({ ...editForm, type: 'income' })}
+                    className={`flex items-center justify-center gap-1.5 py-2 rounded-lg font-bold text-xs sm:text-sm transition cursor-pointer ${
+                      editForm.type === 'income'
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'text-slate-700 hover:text-slate-900'
+                    }`}
+                  >
+                    <TrendingUp className="w-4 h-4" />
+                    <span>수입</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditForm({ ...editForm, type: 'transfer' })}
+                    className={`flex items-center justify-center gap-1.5 py-2 rounded-lg font-bold text-xs sm:text-sm transition cursor-pointer ${
+                      editForm.type === 'transfer'
+                        ? 'bg-sky-600 text-white shadow-xs'
+                        : 'text-slate-700 hover:text-slate-900'
+                    }`}
+                  >
+                    <ArrowLeftRight className="w-4 h-4" />
+                    <span>이체/저축</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 3. Amount Input with Quick Add Keypad */}
+              <div>
+                <label className="block text-xs font-black text-slate-700 mb-1.5 whitespace-nowrap">
+                  금액 <span className="text-red-500">*</span>
+                </label>
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xl font-black text-slate-500">
+                    ₩
+                  </span>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="0"
+                    value={editAmountStr}
+                    onChange={handleEditAmountChange}
+                    className="w-full pl-10 pr-4 py-3 bg-white border-2 border-slate-300 rounded-xl text-xl sm:text-2xl font-black text-slate-900 placeholder:text-slate-300 focus:outline-none focus:border-blue-600 transition"
+                    required
+                  />
+                </div>
+
+                {/* Quick Amount Buttons */}
+                <div className="flex flex-wrap items-center gap-1.5 mt-2 whitespace-nowrap">
+                  {[10000, 30000, 50000, 100000, 500000].map((val) => (
+                    <button
+                      key={val}
+                      type="button"
+                      onClick={() => handleEditAddAmount(val)}
+                      className="px-2.5 py-1 text-xs font-extrabold bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg transition active:scale-95 cursor-pointer border border-slate-200"
+                    >
+                      +{val >= 10000 ? `${val / 10000}만` : `${val.toLocaleString()}원`}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditAmountStr('');
+                      setEditForm((prev) => ({ ...prev, amount: 0 }));
+                    }}
+                    className="p-1 text-xs font-bold text-slate-500 hover:text-slate-800 rounded-lg ml-auto cursor-pointer"
+                    title="금액 지우기"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* 4. Description (사용처 / 내용) */}
+              <div>
+                <label className="block text-xs font-black text-slate-700 mb-1.5 whitespace-nowrap">
+                  사용처 / 내용 <span className="text-red-500">*</span>
+                </label>
                 <input
                   type="text"
-                  placeholder="예: 식비, 외식, 카페, 마트, 교통비..."
-                  value={editForm.category || ''}
-                  onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
-                  className="w-full p-2.5 bg-slate-50 border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-600 focus:bg-white"
+                  placeholder="예: 마트 장보기, 스타벅스, 식사..."
+                  value={editForm.description || ''}
+                  onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                  className="w-full px-4 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-sm font-bold text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-600 transition"
+                  required
                 />
-                {allCategories.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {allCategories.slice(0, 8).map((cat) => (
+              </div>
+
+              {/* 5. Category Chips with Direct Input */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5 whitespace-nowrap">
+                  <label className="text-xs font-black text-slate-700 flex items-center gap-1">
+                    <Tag className="w-3.5 h-3.5 text-blue-600" />
+                    <span>분류 (카테고리)</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    {onOpenCategoryManager && (
+                      <button
+                        type="button"
+                        onClick={onOpenCategoryManager}
+                        className="flex items-center gap-1 text-[11px] font-bold text-slate-600 hover:text-blue-600 cursor-pointer"
+                        title="카테고리 및 결제수단 관리 열기"
+                      >
+                        <Settings className="w-3 h-3 text-slate-500" />
+                        <span>항목 설정</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setCustomCategoryInput(!customCategoryInput)}
+                      className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
+                    >
+                      {customCategoryInput ? '목록 선택' : '+ 직접 입력'}
+                    </button>
+                  </div>
+                </div>
+
+                {customCategoryInput ? (
+                  <div className="flex items-center gap-2 whitespace-nowrap">
+                    <input
+                      type="text"
+                      placeholder="새 분류 이름 직접 입력..."
+                      value={newCategoryText}
+                      onChange={(e) => setNewCategoryText(e.target.value)}
+                      className="flex-1 px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold focus:border-blue-600"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (newCategoryText.trim()) {
+                          setEditForm((prev) => ({ ...prev, category: newCategoryText.trim() }));
+                          setCustomCategoryInput(false);
+                        }
+                      }}
+                      className="px-3 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl hover:bg-blue-700 cursor-pointer shrink-0"
+                    >
+                      적용
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto pr-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                    {allCategories.map((cat) => (
                       <button
                         key={cat}
                         type="button"
                         onClick={() => setEditForm({ ...editForm, category: cat })}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                        className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer whitespace-nowrap ${
                           editForm.category === cat
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                            ? editForm.type === 'expense'
+                              ? 'bg-rose-600 text-white shadow-sm'
+                              : editForm.type === 'income'
+                              ? 'bg-emerald-600 text-white shadow-sm'
+                              : 'bg-sky-600 text-white shadow-sm'
+                            : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-200'
                         }`}
                       >
                         {cat}
@@ -1366,163 +1665,203 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 )}
               </div>
 
-              {/* Row 3: Description (내용 / 사용처) */}
+              {/* 6. Payment Method Chips */}
               <div>
-                <label className="block font-black text-slate-700 mb-1">내용 / 사용처</label>
-                <input
-                  type="text"
-                  placeholder="예: 스타벅스 아메리카노, 이마트 장보기, 주유..."
-                  value={editForm.description || ''}
-                  onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                  className="w-full p-2.5 bg-slate-50 border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-600 focus:bg-white"
-                />
-              </div>
-
-              {/* Row 4: Amount */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="font-black text-slate-700">금액</label>
-                  {editForm.amount && editForm.amount > 0 && (
-                    <span className="text-xs font-black text-blue-600">
-                      {Number(editForm.amount).toLocaleString('ko-KR')}원
-                    </span>
+                <div className="flex items-center justify-between mb-1.5 whitespace-nowrap">
+                  <label className="text-xs font-black text-slate-700 flex items-center gap-1">
+                    <CreditCard className="w-3.5 h-3.5 text-blue-600" />
+                    <span>결제 수단</span>
+                  </label>
+                  {onOpenCategoryManager && (
+                    <button
+                      type="button"
+                      onClick={onOpenCategoryManager}
+                      className="flex items-center gap-1 text-[11px] font-bold text-slate-500 hover:text-blue-600 cursor-pointer"
+                    >
+                      <Settings className="w-3 h-3" />
+                      <span>결제수단 관리</span>
+                    </button>
                   )}
                 </div>
-                <div className="relative">
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    placeholder="0"
-                    value={editForm.amount || ''}
-                    onChange={(e) =>
-                      setEditForm({ ...editForm, amount: e.target.value ? Number(e.target.value) : 0 })
-                    }
-                    className="w-full p-2.5 pr-10 bg-slate-50 border-2 border-slate-200 rounded-xl text-sm font-black text-slate-900 focus:outline-none focus:border-blue-600 focus:bg-white text-right"
-                  />
-                  <span className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
-                    원
-                  </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {allPaymentMethods.map((pm) => (
+                    <button
+                      key={pm}
+                      type="button"
+                      onClick={() => setEditForm({ ...editForm, paymentMethod: pm })}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer whitespace-nowrap ${
+                        editForm.paymentMethod === pm
+                          ? 'bg-indigo-600 text-white shadow-sm'
+                          : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      {pm}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {/* Row 5: Payment Method */}
-              <div>
-                <label className="block font-black text-slate-700 mb-1">결제 수단</label>
-                <input
-                  type="text"
-                  placeholder="예: 신한카드, 네이버페이, 현금..."
-                  value={editForm.paymentMethod || ''}
-                  onChange={(e) => setEditForm({ ...editForm, paymentMethod: e.target.value })}
-                  className="w-full p-2.5 bg-slate-50 border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-600 focus:bg-white"
-                />
-                {allPaymentMethods.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {allPaymentMethods.slice(0, 6).map((pm) => (
+              {/* 7. Sub-item Breakdown Management (쿠팡, 마트 등 복합 결제) */}
+              <div className="border border-blue-200 bg-blue-50/40 rounded-xl p-3 space-y-2">
+                <div className="flex items-center justify-between whitespace-nowrap">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!showEditSubItemEntry && editSubItems.length === 0) {
+                        handleAddEditSubItem();
+                      }
+                      setShowEditSubItemEntry(!showEditSubItemEntry);
+                    }}
+                    className="flex items-center gap-2 text-xs font-black text-blue-800 hover:text-blue-900 cursor-pointer"
+                  >
+                    <div className="w-5 h-5 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold">
+                      <Layers className="w-3.5 h-3.5" />
+                    </div>
+                    <span>쿠팡·마트 품목별 세부내역 관리 ({editSubItems.length}개)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!showEditSubItemEntry && editSubItems.length === 0) {
+                        handleAddEditSubItem();
+                      }
+                      setShowEditSubItemEntry(!showEditSubItemEntry);
+                    }}
+                    className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
+                  >
+                    {showEditSubItemEntry ? '접기 ▲' : '세부내역 펼치기 ▼'}
+                  </button>
+                </div>
+
+                {showEditSubItemEntry && (
+                  <div className="space-y-2 pt-1 border-t border-blue-100 animate-in fade-in duration-150">
+                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 font-medium whitespace-nowrap overflow-x-auto scrollbar-none">
+                      <span>품목별로 카테고리와 금액을 나누어 기록할 수 있습니다.</span>
+                      <div className="flex items-center gap-1 text-[11px] shrink-0">
+                        <span className="text-slate-400">예시:</span>
+                        <button
+                          type="button"
+                          onClick={() => applyEditPreset('coupang')}
+                          className="px-1.5 py-0.5 bg-white border border-slate-200 hover:border-blue-400 text-slate-700 rounded text-[10px] font-bold transition cursor-pointer"
+                        >
+                          쿠팡
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => applyEditPreset('mart')}
+                          className="px-1.5 py-0.5 bg-white border border-slate-200 hover:border-blue-400 text-slate-700 rounded text-[10px] font-bold transition cursor-pointer"
+                        >
+                          마트
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      {editSubItems.map((item, idx) => (
+                        <div key={item.id} className="flex items-center gap-1.5 whitespace-nowrap">
+                          <span className="text-[10px] font-mono font-bold text-slate-400 w-4 text-center shrink-0">
+                            {idx + 1}
+                          </span>
+                          <input
+                            type="text"
+                            placeholder="품목명 (예: 우유, 세제)"
+                            value={item.name}
+                            onChange={(e) => handleUpdateEditSubItem(item.id, 'name', e.target.value)}
+                            className="flex-1 min-w-[85px] px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-500"
+                          />
+                          <select
+                            value={item.category || editForm.category || '식비'}
+                            onChange={(e) => handleUpdateEditSubItem(item.id, 'category', e.target.value)}
+                            className="w-20 sm:w-24 px-1.5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-700 focus:outline-none focus:border-blue-500 shrink-0"
+                          >
+                            {allCategories.map((c) => (
+                              <option key={c} value={c}>
+                                {c}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="w-22 sm:w-28 relative shrink-0">
+                            <input
+                              type="number"
+                              min="0"
+                              step="10"
+                              placeholder="금액"
+                              value={item.amount || ''}
+                              onChange={(e) =>
+                                handleUpdateEditSubItem(
+                                  item.id,
+                                  'amount',
+                                  e.target.value ? Number(e.target.value) : 0
+                                )
+                              }
+                              className="w-full pl-2 pr-5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-black text-slate-900 text-right focus:outline-none focus:border-blue-500"
+                            />
+                            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">
+                              원
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveEditSubItem(item.id)}
+                            className="p-1 text-slate-400 hover:text-rose-600 rounded-md cursor-pointer shrink-0"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1 whitespace-nowrap">
                       <button
-                        key={pm}
                         type="button"
-                        onClick={() => setEditForm({ ...editForm, paymentMethod: pm })}
-                        className={`px-2 py-0.5 rounded-lg text-[11px] font-bold transition cursor-pointer ${
-                          editForm.paymentMethod === pm
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                        }`}
+                        onClick={handleAddEditSubItem}
+                        className="px-2.5 py-1 bg-white border border-blue-300 text-blue-700 hover:bg-blue-50 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer shrink-0"
                       >
-                        {pm}
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>품목 추가</span>
                       </button>
-                    ))}
+
+                      {editSubItemsSum > 0 && (
+                        <div className="flex items-center gap-2 text-xs whitespace-nowrap shrink-0">
+                          <span className="text-slate-600 font-bold">
+                            품목 합계:{' '}
+                            <strong className="text-blue-700 font-black">
+                              {editSubItemsSum.toLocaleString('ko-KR')}원
+                            </strong>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleSyncEditAmountWithSubItems}
+                            className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-[11px] font-black cursor-pointer shadow-xs whitespace-nowrap shrink-0"
+                            title="상단 금액을 세부 품목 합계로 자동 설정"
+                          >
+                            총 금액에 적용
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
 
-              {/* Row 6: Memo */}
+              {/* 8. Memo */}
               <div>
-                <label className="block font-black text-slate-700 mb-1">메모 (선택)</label>
+                <label className="block text-xs font-black text-slate-700 mb-1.5 flex items-center gap-1 whitespace-nowrap">
+                  <FileText className="w-3.5 h-3.5 text-slate-500" />
+                  <span>메모 (선택)</span>
+                </label>
                 <input
                   type="text"
                   placeholder="비고나 세부 메모를 입력하세요"
                   value={editForm.memo || ''}
                   onChange={(e) => setEditForm({ ...editForm, memo: e.target.value })}
-                  className="w-full p-2.5 bg-slate-50 border-2 border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:outline-none focus:border-blue-600 focus:bg-white"
+                  className="w-full px-4 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-600 transition"
                 />
-              </div>
-
-              {/* Row 7: Sub-items Breakdown Section (항목 수정 화면 전용) */}
-              <div className="pt-2 border-t border-slate-200">
-                <div className="p-3.5 bg-blue-50/50 border border-blue-200 rounded-xl space-y-2.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5 font-black text-slate-800 text-xs">
-                      <div className="w-5 h-5 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold">
-                        <Layers className="w-3.5 h-3.5" />
-                      </div>
-                      <span>품목별 세부내역 관리</span>
-                      {editModalTx.subItems && editModalTx.subItems.length > 0 && (
-                        <span className="text-[10px] font-black text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full border border-blue-200">
-                          {editModalTx.subItems.length}개 품목 등록됨
-                        </span>
-                      )}
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const currentTx: Transaction = {
-                          ...editModalTx,
-                          date: editForm.date || editModalTx.date,
-                          type: editForm.type || editModalTx.type,
-                          category: editForm.category || editModalTx.category,
-                          description: (editForm.description || editModalTx.description).trim(),
-                          amount: Number(editForm.amount) || editModalTx.amount,
-                          paymentMethod: editForm.paymentMethod || editModalTx.paymentMethod,
-                          memo: editForm.memo || editModalTx.memo,
-                        };
-                        setSubItemModalTx(currentTx);
-                      }}
-                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95"
-                    >
-                      <Layers className="w-3.5 h-3.5" />
-                      <span>
-                        {editModalTx.subItems && editModalTx.subItems.length > 0
-                          ? '세부내역 편집 / 품목 추가'
-                          : '+ 품목별 세부내역 입력하기'}
-                      </span>
-                    </button>
-                  </div>
-
-                  {editModalTx.subItems && editModalTx.subItems.length > 0 ? (
-                    <div className="space-y-1 bg-white p-2.5 rounded-lg border border-blue-100 text-xs max-h-36 overflow-y-auto">
-                      {editModalTx.subItems.map((sub, sIdx) => (
-                        <div
-                          key={sub.id || sIdx}
-                          className="flex items-center justify-between py-1 border-b border-slate-100 last:border-b-0 text-[11px]"
-                        >
-                          <div className="flex items-center gap-1.5 min-w-0 pr-2">
-                            <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
-                            <span className="font-semibold text-slate-800 truncate">{sub.name}</span>
-                            {sub.category && (
-                              <span className="text-[9px] font-bold text-slate-500 bg-slate-50 border border-slate-200 px-1.5 py-0.2 rounded shrink-0">
-                                {sub.category}
-                              </span>
-                            )}
-                          </div>
-                          <span className="font-bold text-slate-700 font-mono shrink-0">
-                            {sub.amount.toLocaleString('ko-KR')}원
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
-                      쿠팡, 네이버쇼핑, 마트 등 한 번에 여러 물품을 결제한 경우 <strong>품목별 세부내역 입력하기</strong>를 눌러 각 품목명, 개별 카테고리, 금액을 세부적으로 나누어 기록할 수 있습니다.
-                    </p>
-                  )}
-                </div>
               </div>
             </div>
 
             {/* Modal Actions */}
-            <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-end gap-2">
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2 shrink-0 whitespace-nowrap">
               <button
                 type="button"
                 disabled={isSubmittingEdit}

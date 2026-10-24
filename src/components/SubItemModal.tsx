@@ -190,12 +190,12 @@ export const SubItemModal: React.FC<SubItemModalProps> = ({
         </div>
 
         {/* Quick Help & Presets Bar */}
-        <div className="px-4 sm:px-6 py-2.5 bg-slate-50 border-b border-slate-200 text-xs flex flex-wrap items-center justify-between gap-2 shrink-0">
-          <span className="text-[11px] text-slate-500 flex items-center gap-1 font-medium">
+        <div className="px-4 sm:px-6 py-2.5 bg-slate-50 border-b border-slate-200 text-xs flex items-center justify-between gap-2 shrink-0 whitespace-nowrap overflow-x-auto scrollbar-none">
+          <span className="text-[11px] text-slate-500 flex items-center gap-1 font-medium whitespace-nowrap shrink-0">
             <Package className="w-3.5 h-3.5 text-slate-400" />
-            장바구니 영수증의 각 품목명과 금액을 입력하세요.
+            <span>장바구니 영수증의 각 품목명과 금액을 입력하세요.</span>
           </span>
-          <div className="flex items-center gap-1.5 text-[11px]">
+          <div className="flex items-center gap-1.5 text-[11px] whitespace-nowrap shrink-0">
             <span className="text-slate-400">예시 템플릿:</span>
             <button
               type="button"
@@ -221,87 +221,84 @@ export const SubItemModal: React.FC<SubItemModalProps> = ({
               등록된 세부 품목이 없습니다. 아래 [+ 새 품목 추가] 버튼을 눌러주세요.
             </div>
           ) : (
-            <div className="space-y-2.5">
-              <div className="hidden sm:grid sm:grid-cols-12 gap-2 text-[11px] font-black text-slate-500 px-1">
-                <div className="col-span-5">품목명 / 상품명</div>
-                <div className="col-span-3">세부분류 (선택)</div>
-                <div className="col-span-3 text-right">금액 (원)</div>
-                <div className="col-span-1 text-center">삭제</div>
+            <div className="space-y-2">
+              <div className="hidden sm:flex items-center gap-1.5 text-[11px] font-black text-slate-500 px-2 whitespace-nowrap">
+                <div className="w-5 text-center">#</div>
+                <div className="flex-1">품목명 / 상품명</div>
+                <div className="w-24 sm:w-28">세부분류</div>
+                <div className="w-24 sm:w-32 text-right">금액 (원)</div>
+                <div className="w-7 text-center">삭제</div>
               </div>
 
               {subItems.map((item, index) => (
                 <div
                   key={item.id}
-                  className="p-2.5 sm:p-2 bg-slate-50 hover:bg-blue-50/40 rounded-xl border border-slate-200 transition flex flex-col sm:grid sm:grid-cols-12 gap-2 items-center"
+                  className="p-1.5 sm:p-2 bg-slate-50 hover:bg-blue-50/40 rounded-xl border border-slate-200 transition flex items-center gap-1.5 whitespace-nowrap"
                 >
+                  {/* Number */}
+                  <span className="text-[11px] font-bold text-slate-400 w-5 shrink-0 text-center font-mono">
+                    {index + 1}
+                  </span>
+
                   {/* Name */}
-                  <div className="w-full sm:col-span-5 flex items-center gap-2">
-                    <span className="text-[11px] font-bold text-slate-400 w-5 shrink-0 text-center font-mono">
-                      {index + 1}
-                    </span>
-                    <input
-                      type="text"
-                      placeholder="품목명 (예: 주방세제, 신선우유)"
-                      value={item.name}
-                      onChange={(e) => handleUpdateRow(item.id, 'name', e.target.value)}
-                      className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
+                  <input
+                    type="text"
+                    placeholder="품목명 (예: 주방세제, 우유)"
+                    value={item.name}
+                    onChange={(e) => handleUpdateRow(item.id, 'name', e.target.value)}
+                    className="flex-1 min-w-[90px] px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-500"
+                  />
 
                   {/* Category */}
-                  <div className="w-full sm:col-span-3">
-                    <select
-                      value={item.category || transaction.category}
-                      onChange={(e) => handleUpdateRow(item.id, 'category', e.target.value)}
-                      className="w-full px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-700 focus:outline-none focus:border-blue-500"
-                    >
-                      {availableCategories.length > 0 ? (
-                        availableCategories.map((c) => (
-                          <option key={c} value={c}>
-                            {c}
-                          </option>
-                        ))
-                      ) : (
-                        <>
-                          <option value="식비">식비</option>
-                          <option value="생활용품">생활용품</option>
-                          <option value="간식">간식</option>
-                          <option value="의류/잡화">의류/잡화</option>
-                          <option value="기타">기타</option>
-                        </>
-                      )}
-                    </select>
-                  </div>
+                  <select
+                    value={item.category || transaction.category}
+                    onChange={(e) => handleUpdateRow(item.id, 'category', e.target.value)}
+                    className="w-22 sm:w-28 shrink-0 px-2 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-700 focus:outline-none focus:border-blue-500"
+                  >
+                    {availableCategories.length > 0 ? (
+                      availableCategories.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))
+                    ) : (
+                      <>
+                        <option value="식비">식비</option>
+                        <option value="생활용품">생활용품</option>
+                        <option value="간식">간식</option>
+                        <option value="의류/잡화">의류/잡화</option>
+                        <option value="기타">기타</option>
+                      </>
+                    )}
+                  </select>
 
                   {/* Amount */}
-                  <div className="w-full sm:col-span-3 relative">
+                  <div className="w-24 sm:w-32 shrink-0 relative">
                     <input
                       type="number"
                       min="0"
                       step="10"
-                      placeholder="금액 (원)"
+                      placeholder="금액"
                       value={item.amount || ''}
                       onChange={(e) =>
                         handleUpdateRow(item.id, 'amount', e.target.value ? Number(e.target.value) : 0)
                       }
-                      className="w-full pl-2 pr-7 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-black text-slate-900 text-right focus:outline-none focus:border-blue-500"
+                      className="w-full pl-2 pr-6 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-black text-slate-900 text-right focus:outline-none focus:border-blue-500"
                     />
-                    <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">
+                    <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400">
                       원
                     </span>
                   </div>
 
                   {/* Delete Button */}
-                  <div className="w-full sm:col-span-1 flex justify-end sm:justify-center">
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveRow(item.id)}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                      title="품목 삭제"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveRow(item.id)}
+                    className="w-7 h-7 flex items-center justify-center text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer shrink-0"
+                    title="품목 삭제"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               ))}
             </div>

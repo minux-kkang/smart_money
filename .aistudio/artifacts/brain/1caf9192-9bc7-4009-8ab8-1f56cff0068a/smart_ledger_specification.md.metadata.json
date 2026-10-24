@@ -1,5 +1,0 @@
-{
-  "summary":  "스마트 가계부(Smart Household Ledger) 시스템 아키텍처 및 재구현을 위한 전체 기술 구현 명세서. Zero-Backend 설계, Google OAuth 및 Sheets API CRUD 연동 규격, 스마트 파싱 엔진, 모바일 최적화 규칙, PWA 및 GitHub Pages 자동 배포 가이드 포함.",
-  "updatedAt":  "2026-10-23T13:07:20.699681897Z",
-  "userFacing":  true
-}

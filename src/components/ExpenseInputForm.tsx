@@ -749,14 +749,45 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
 
           {showSubItemEntry && (
             <div className="space-y-2 pt-1 border-t border-blue-100 animate-in fade-in duration-150">
-              <p className="text-[11px] text-slate-500 font-medium">
-                쿠팡이나 마트 장보기 영수증처럼 한 번에 여러 물품을 결제했을 때 각 품목과 금액을 나누어 기록할 수 있습니다.
-              </p>
+              <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 font-medium whitespace-nowrap overflow-x-auto scrollbar-none">
+                <span>쿠팡·마트 등 여러 물품을 결제했을 때 각 품목별 카테고리와 금액을 나누어 기록합니다.</span>
+                <div className="flex items-center gap-1 text-[11px] shrink-0">
+                  <span className="text-slate-400">예시:</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSubItems([
+                        { id: `sub-p1`, name: '신선란 30구', amount: 8900, category: '식비' },
+                        { id: `sub-p2`, name: '서울우유 2.3L', amount: 6450, category: '식비' },
+                        { id: `sub-p3`, name: '롤화장지 30롤', amount: 19800, category: '생활용품' },
+                      ]);
+                      setAmountStr((35150).toLocaleString('ko-KR'));
+                    }}
+                    className="px-1.5 py-0.5 bg-white border border-slate-200 hover:border-blue-400 text-slate-700 rounded text-[10px] font-bold transition cursor-pointer"
+                  >
+                    쿠팡
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSubItems([
+                        { id: `sub-p1`, name: '소고기 300g', amount: 28000, category: '식비' },
+                        { id: `sub-p2`, name: '대파 & 양파', amount: 6500, category: '식비' },
+                        { id: `sub-p3`, name: '주방세제 리필', amount: 7500, category: '생활용품' },
+                      ]);
+                      setAmountStr((42000).toLocaleString('ko-KR'));
+                    }}
+                    className="px-1.5 py-0.5 bg-white border border-slate-200 hover:border-blue-400 text-slate-700 rounded text-[10px] font-bold transition cursor-pointer"
+                  >
+                    마트
+                  </button>
+                </div>
+              </div>
 
               <div className="space-y-1.5">
                 {subItems.map((item, idx) => (
-                  <div key={item.id} className="flex items-center gap-1.5">
-                    <span className="text-[10px] font-mono font-bold text-slate-400 w-4 text-center">
+                  <div key={item.id} className="flex items-center gap-1.5 whitespace-nowrap">
+                    <span className="text-[10px] font-mono font-bold text-slate-400 w-4 text-center shrink-0">
                       {idx + 1}
                     </span>
                     <input
@@ -764,9 +795,20 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                       placeholder="품목명 (예: 우유, 세제)"
                       value={item.name}
                       onChange={(e) => handleUpdateSubItem(item.id, 'name', e.target.value)}
-                      className="flex-1 px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-500"
+                      className="flex-1 min-w-[85px] px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-500"
                     />
-                    <div className="w-24 sm:w-28 relative">
+                    <select
+                      value={item.category || category || '식비'}
+                      onChange={(e) => handleUpdateSubItem(item.id, 'category', e.target.value)}
+                      className="w-20 sm:w-24 px-1.5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-700 focus:outline-none focus:border-blue-500 shrink-0"
+                    >
+                      {visibleCategories.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="w-22 sm:w-28 relative shrink-0">
                       <input
                         type="number"
                         min="0"
@@ -785,7 +827,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                     <button
                       type="button"
                       onClick={() => handleRemoveSubItem(item.id)}
-                      className="p-1 text-slate-400 hover:text-rose-600 rounded-md cursor-pointer"
+                      className="p-1 text-slate-400 hover:text-rose-600 rounded-md cursor-pointer shrink-0"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
@@ -793,25 +835,25 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                 ))}
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1 whitespace-nowrap">
                 <button
                   type="button"
                   onClick={handleAddSubItem}
-                  className="px-2.5 py-1 bg-white border border-blue-300 text-blue-700 hover:bg-blue-50 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  className="px-2.5 py-1 bg-white border border-blue-300 text-blue-700 hover:bg-blue-50 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer shrink-0"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   <span>품목 추가</span>
                 </button>
 
                 {subItemsSum > 0 && (
-                  <div className="flex items-center gap-2 text-xs">
+                  <div className="flex items-center gap-2 text-xs whitespace-nowrap shrink-0">
                     <span className="text-slate-600 font-bold">
                       품목 합계: <strong className="text-blue-700 font-black">{subItemsSum.toLocaleString('ko-KR')}원</strong>
                     </span>
                     <button
                       type="button"
                       onClick={handleSyncAmountWithSubItems}
-                      className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-[11px] font-black cursor-pointer shadow-xs"
+                      className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-[11px] font-black cursor-pointer shadow-xs whitespace-nowrap shrink-0"
                       title="입력창 상단 금액을 세부 품목 합계로 자동 설정"
                     >
                       총 금액에 적용
