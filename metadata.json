@@ -1,0 +1,6 @@
+{
+  "name": "스마트 가계부 (Smart Ledger)",
+  "description": "구글 드라이브 및 스프레드시트 기반 연도별/월별 가계부 분석 및 지출 관리 서비스",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
