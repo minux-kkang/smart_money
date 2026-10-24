@@ -107,8 +107,65 @@ export function formatShortDate(dateStr: string): string {
     const d = mdMatch[2].padStart(2, '0');
     return `${m}.${d}`;
   }
-
   return str;
 }
 
+export interface CategoryItem {
+  id: string;
+  name: string;
+  type: TransactionType;
+  isVisible: boolean; // 보이기 / 숨기기 (입력창 노출 여부)
+  color?: string;
+  isCustom?: boolean;
+}
 
+export interface PaymentMethodItem {
+  id: string;
+  name: string;
+  isVisible: boolean; // 보이기 / 숨기기 (입력창 노출 여부)
+  isCustom?: boolean;
+}
+
+export const DEFAULT_EXPENSE_CATEGORIES: string[] = [
+  '식비',
+  '외식',
+  '간식',
+  '생활용품',
+  '의류/잡화',
+  '교육',
+  '용돈',
+  '관리비_기타',
+  '통신비',
+  '보험료',
+  '구독',
+  '렌탈',
+  '교통비',
+  '자동차관리',
+  '의료비',
+  '여행비',
+  '취미',
+  '골프',
+  '경조사',
+  '세금/공과금',
+  '대출_원금',
+  '대출_이자',
+  '미용',
+];
+
+export const DEFAULT_INCOME_CATEGORIES: string[] = [
+  '급여',
+  '상여금',
+  '부수입',
+  '금융소득',
+  '용돈',
+  '기타수입',
+];
+
+export const DEFAULT_PAYMENT_METHODS: string[] = [
+  '신용카드',
+  '체크카드',
+  '현금',
+  '계좌이체',
+  '네이버페이',
+  '카카오페이',
+];

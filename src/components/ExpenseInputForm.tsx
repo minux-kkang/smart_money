@@ -15,7 +15,18 @@ import {
   Info,
   X,
 } from 'lucide-react';
-import { Transaction, TransactionType, SheetAnalysisResult, formatShortDate } from '../types/ledger';
+import {
+  Transaction,
+  TransactionType,
+  SheetAnalysisResult,
+  formatShortDate,
+  CategoryItem,
+  PaymentMethodItem,
+  DEFAULT_EXPENSE_CATEGORIES,
+  DEFAULT_INCOME_CATEGORIES,
+  DEFAULT_PAYMENT_METHODS,
+} from '../types/ledger';
+import { Settings } from 'lucide-react';
 
 interface ExpenseInputFormProps {
   analysis: SheetAnalysisResult;
@@ -27,6 +38,9 @@ interface ExpenseInputFormProps {
   ) => Promise<void>;
   onClose?: () => void;
   isModal?: boolean;
+  customCategories?: CategoryItem[];
+  customPaymentMethods?: PaymentMethodItem[];
+  onOpenCategoryManager?: () => void;
 }
 
 export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
@@ -37,6 +51,9 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   onAddTransaction,
   onClose,
   isModal = false,
+  customCategories,
+  customPaymentMethods,
+  onOpenCategoryManager,
 }) => {
   const [type, setType] = useState<TransactionType>('expense');
   const [amountStr, setAmountStr] = useState<string>('');
@@ -47,6 +64,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   const [memo, setMemo] = useState<string>('');
   const [customCategoryInput, setCustomCategoryInput] = useState<boolean>(false);
   const [newCategoryText, setNewCategoryText] = useState<string>('');
+  const [showHiddenCategories, setShowHiddenCategories] = useState<boolean>(false);
   const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [successAnimation, setSuccessAnimation] = useState<boolean>(false);
@@ -66,60 +84,69 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     return activeSheetTitle || '10월';
   }, [date, activeSheetTitle]);
 
-  // Available categories for selected type
-  const availableCategories = React.useMemo(() => {
-    const list = analysis.detectedCategories
-      .filter((c) => (type === 'income' ? c.type === 'income' : c.type === 'expense'))
-      .map((c) => c.name);
+  // Categories resolved from custom settings or sheet
+  const { visibleCategories, hiddenCategories } = React.useMemo(() => {
+    let list: CategoryItem[] = [];
+    if (customCategories && customCategories.length > 0) {
+      list = customCategories.filter((c) =>
+        type === 'income' ? c.type === 'income' : c.type === 'expense'
+      );
+    } else {
+      list = analysis.detectedCategories
+        .filter((c) => (type === 'income' ? c.type === 'income' : c.type === 'expense'))
+        .map((c, i) => ({
+          id: `det_${i}_${c.name}`,
+          name: c.name,
+          type: c.type,
+          isVisible: true,
+        }));
+    }
 
     if (list.length === 0) {
-      if (type === 'income') {
-        return ['급여', '상여금', '부수입', '금융소득', '용돈', '기타수입'];
-      }
-      return [
-        '식비',
-        '외식',
-        '간식',
-        '생활용품',
-        '의류/잡화',
-        '교육',
-        '용돈',
-        '관리비_기타',
-        '통신비',
-        '보험료',
-        '구독',
-        '렌탈',
-        '교통비',
-        '자동차관리',
-        '의료비',
-        '여행비',
-        '취미',
-        '골프',
-        '경조사',
-        '세금/공과금',
-        '대출_원금',
-        '대출_이자',
-        '미용',
-      ];
+      const defaults = type === 'income' ? DEFAULT_INCOME_CATEGORIES : DEFAULT_EXPENSE_CATEGORIES;
+      list = defaults.map((name, i) => ({
+        id: `def_${i}_${name}`,
+        name,
+        type,
+        isVisible: true,
+      }));
     }
-    return list;
-  }, [analysis.detectedCategories, type]);
+
+    const visible = list.filter((c) => c.isVisible).map((c) => c.name);
+    const hidden = list.filter((c) => !c.isVisible).map((c) => c.name);
+
+    return {
+      visibleCategories: visible.length > 0 ? visible : list.map((c) => c.name),
+      hiddenCategories: hidden,
+    };
+  }, [customCategories, analysis.detectedCategories, type]);
+
+  // Resolved payment methods
+  const visiblePaymentMethods = React.useMemo(() => {
+    if (customPaymentMethods && customPaymentMethods.length > 0) {
+      const vis = customPaymentMethods.filter((p) => p.isVisible).map((p) => p.name);
+      return vis.length > 0 ? vis : customPaymentMethods.map((p) => p.name);
+    }
+    return analysis.detectedPaymentMethods.length > 0
+      ? analysis.detectedPaymentMethods
+      : DEFAULT_PAYMENT_METHODS;
+  }, [customPaymentMethods, analysis.detectedPaymentMethods]);
 
   // Set default category when type or category list changes
   useEffect(() => {
-    if (!category || !availableCategories.includes(category)) {
-      if (availableCategories.length > 0) {
-        setCategory(availableCategories[0]);
+    if (!category || !visibleCategories.includes(category)) {
+      if (visibleCategories.length > 0) {
+        setCategory(visibleCategories[0]);
       }
     }
-  }, [type, availableCategories]);
+  }, [type, visibleCategories]);
 
   // Set default payment method
   useEffect(() => {
-    if (!paymentMethod && analysis.detectedPaymentMethods.length > 0) {
-      setPaymentMethod(analysis.detectedPaymentMethods[0]);
+    if (!paymentMethod && visiblePaymentMethods.length > 0) {
+      setPaymentMethod(visiblePaymentMethods[0]);
     }
-  }, [analysis.detectedPaymentMethods]);
+  }, [visiblePaymentMethods]);
 
   // Smart Autocomplete Suggestions based on Description typing
   const filteredSuggestions = React.useMemo(() => {
@@ -482,27 +509,52 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
           )}
         </div>
 
-        {/* 5. Category Pills (26 Categories) */}
+        {/* 5. Category Pills */}
         <div>
           <div className="flex items-center justify-between mb-1.5">
-            <label className="text-xs font-black text-slate-700 flex items-center gap-1">
-              <Tag className="w-3.5 h-3.5 text-blue-600" />
-              <span>분류 (카테고리 {availableCategories.length}개)</span>
-            </label>
-            <button
-              type="button"
-              onClick={() => setCustomCategoryInput(!customCategoryInput)}
-              className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
-            >
-              {customCategoryInput ? '목록에서 선택' : '+ 직접 입력'}
-            </button>
+            <div className="flex items-center gap-1.5">
+              <label className="text-xs font-black text-slate-700 flex items-center gap-1">
+                <Tag className="w-3.5 h-3.5 text-blue-600" />
+                <span>분류 ({visibleCategories.length}개 표시 중)</span>
+              </label>
+              {hiddenCategories.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowHiddenCategories(!showHiddenCategories)}
+                  className="text-[11px] font-bold text-slate-500 hover:text-blue-600 transition cursor-pointer"
+                >
+                  {showHiddenCategories ? '숨김 닫기 ▲' : `+숨김 ${hiddenCategories.length}개 보기 ▼`}
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2">
+              {onOpenCategoryManager && (
+                <button
+                  type="button"
+                  onClick={onOpenCategoryManager}
+                  className="flex items-center gap-1 text-[11px] font-bold text-slate-600 hover:text-blue-600 cursor-pointer"
+                  title="카테고리 및 결제수단 관리 열기"
+                >
+                  <Settings className="w-3 h-3 text-slate-500" />
+                  <span>항목 설정</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setCustomCategoryInput(!customCategoryInput)}
+                className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
+              >
+                {customCategoryInput ? '목록 선택' : '+ 직접 입력'}
+              </button>
+            </div>
           </div>
 
           {customCategoryInput ? (
             <div className="flex items-center gap-2">
               <input
                 type="text"
-                placeholder="새 분류 이름 입력..."
+                placeholder="새 분류 이름 직접 입력..."
                 value={newCategoryText}
                 onChange={(e) => setNewCategoryText(e.target.value)}
                 className="flex-1 px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold focus:border-blue-600"
@@ -516,35 +568,84 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
               </button>
             </div>
           ) : (
-            <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
-              {availableCategories.map((cat) => (
-                <button
-                  key={cat}
-                  type="button"
-                  onClick={() => setCategory(cat)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer ${
-                    category === cat
-                      ? type === 'expense'
-                        ? 'bg-rose-600 text-white shadow-sm'
-                        : 'bg-emerald-600 text-white shadow-sm'
-                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-200'
-                  }`}
-                >
-                  {cat}
-                </button>
-              ))}
+            <div className="space-y-1.5">
+              {/* Visible Categories */}
+              <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto pr-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
+                {visibleCategories.map((cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setCategory(cat)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer ${
+                      category === cat
+                        ? type === 'expense'
+                          ? 'bg-rose-600 text-white shadow-sm'
+                          : 'bg-emerald-600 text-white shadow-sm'
+                        : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-200'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+
+              {/* Expandable Hidden Categories */}
+              {showHiddenCategories && hiddenCategories.length > 0 && (
+                <div className="p-2 bg-slate-100/80 rounded-xl border border-dashed border-slate-300 space-y-1">
+                  <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 px-1">
+                    <span>숨김 처리된 분류 (클릭하여 선택 가능)</span>
+                    {onOpenCategoryManager && (
+                      <button
+                        type="button"
+                        onClick={onOpenCategoryManager}
+                        className="text-blue-600 hover:underline cursor-pointer"
+                      >
+                        설정에서 보이기 전환
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pr-1">
+                    {hiddenCategories.map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setCategory(cat)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-medium transition cursor-pointer ${
+                          category === cat
+                            ? 'bg-slate-800 text-white'
+                            : 'bg-white/80 text-slate-600 border border-slate-200 hover:bg-white'
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
 
         {/* 6. Payment Method Selector */}
         <div>
-          <label className="block text-xs font-black text-slate-700 mb-1.5 flex items-center gap-1">
-            <CreditCard className="w-3.5 h-3.5 text-blue-600" />
-            <span>결제 수단</span>
-          </label>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs font-black text-slate-700 flex items-center gap-1">
+              <CreditCard className="w-3.5 h-3.5 text-blue-600" />
+              <span>결제 수단</span>
+            </label>
+            {onOpenCategoryManager && (
+              <button
+                type="button"
+                onClick={onOpenCategoryManager}
+                className="flex items-center gap-1 text-[11px] font-bold text-slate-500 hover:text-blue-600 cursor-pointer"
+              >
+                <Settings className="w-3 h-3" />
+                <span>결제수단 관리</span>
+              </button>
+            )}
+          </div>
           <div className="flex flex-wrap gap-1.5">
-            {analysis.detectedPaymentMethods.map((pm) => (
+            {visiblePaymentMethods.map((pm) => (
               <button
                 key={pm}
                 type="button"

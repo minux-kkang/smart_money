@@ -27,6 +27,7 @@ import { SpreadsheetPickerModal } from './components/SpreadsheetPickerModal';
 import { GitHubModal } from './components/GitHubModal';
 import { ConfirmationModal } from './components/ConfirmationModal';
 import { AnnualMatrixView } from './components/AnnualMatrixView';
+import { CategoryManagementModal } from './components/CategoryManagementModal';
 import { SAMPLE_ANALYSIS, SAMPLE_TRANSACTIONS } from './data/sampleLedger';
 import {
   USER_2026_DATA,
@@ -39,7 +40,17 @@ import {
   Transaction,
   SheetAnalysisResult,
   ColumnMapping,
+  CategoryItem,
+  PaymentMethodItem,
 } from './types/ledger';
+import {
+  loadCategories,
+  saveCategories,
+  loadPaymentMethods,
+  savePaymentMethods,
+  getDefaultCategories,
+  getDefaultPaymentMethods,
+} from './services/categoryManager';
 import {
   FileSpreadsheet,
   BarChart3,
@@ -56,6 +67,15 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  // Custom Categories & Payment Methods with show/hide visibility
+  const [customCategories, setCustomCategories] = useState<CategoryItem[]>(() =>
+    loadCategories(USER_CATEGORIES)
+  );
+  const [customPaymentMethods, setCustomPaymentMethods] = useState<PaymentMethodItem[]>(() =>
+    loadPaymentMethods()
+  );
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState<boolean>(false);
 
   // Active Spreadsheet & Sheets state
   const [spreadsheetId, setSpreadsheetId] = useState<string>('user-2026-ledger');
@@ -623,6 +643,41 @@ export default function App() {
     setTransactions(result.transactions);
   };
 
+  // Category & Payment Method Handlers
+  const handleUpdateCategories = (newCats: CategoryItem[]) => {
+    setCustomCategories(newCats);
+    saveCategories(newCats);
+  };
+
+  const handleUpdatePaymentMethods = (newMethods: PaymentMethodItem[]) => {
+    setCustomPaymentMethods(newMethods);
+    savePaymentMethods(newMethods);
+  };
+
+  const handleResetCategoryDefaults = () => {
+    const defaultCats = getDefaultCategories(analysis.detectedCategories.map((c) => c.name));
+    const defaultMethods = getDefaultPaymentMethods(analysis.detectedPaymentMethods);
+    setCustomCategories(defaultCats);
+    saveCategories(defaultCats);
+    setCustomPaymentMethods(defaultMethods);
+    savePaymentMethods(defaultMethods);
+  };
+
+  // Auto-sync when returning to tab from Google Sheets web/app
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isRealGoogleConnected && accessToken) {
+        loadSheetData(spreadsheetId, activeSheetTitle, accessToken);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleVisibilityChange);
+    };
+  }, [isRealGoogleConnected, accessToken, spreadsheetId, activeSheetTitle, loadSheetData]);
+
   return (
     <div className="min-h-screen bg-slate-100/70 text-slate-900 font-sans antialiased flex flex-col">
       {/* Global Header */}
@@ -644,6 +699,7 @@ export default function App() {
           }
         }}
         isRefreshing={isLoadingData}
+        onOpenCategoryManager={() => setIsCategoryModalOpen(true)}
       />
 
       {/* Main Content Container */}
@@ -749,6 +805,9 @@ export default function App() {
               isRealGoogleConnected={isRealGoogleConnected}
               onAddTransaction={handleAddTransaction}
               onClose={() => setIsInputExpanded(false)}
+              customCategories={customCategories}
+              customPaymentMethods={customPaymentMethods}
+              onOpenCategoryManager={() => setIsCategoryModalOpen(true)}
             />
           </div>
         )}
@@ -825,8 +884,9 @@ export default function App() {
               onDeleteTransaction={handleDeleteTransaction}
               onBatchDeleteTransactions={handleBatchDeleteTransactions}
               isRealGoogleConnected={isRealGoogleConnected}
-              availableCategories={analysis.detectedCategories.map((c) => c.name)}
-              availablePaymentMethods={analysis.detectedPaymentMethods}
+              availableCategories={customCategories.filter((c) => c.isVisible).map((c) => c.name)}
+              availablePaymentMethods={customPaymentMethods.filter((p) => p.isVisible).map((p) => p.name)}
+              onOpenCategoryManager={() => setIsCategoryModalOpen(true)}
             />
           ) : (
             <SpreadsheetAnalyzer
@@ -863,6 +923,12 @@ export default function App() {
               onAddTransaction={handleAddTransaction}
               onClose={() => setIsInputModalOpen(false)}
               isModal={true}
+              customCategories={customCategories}
+              customPaymentMethods={customPaymentMethods}
+              onOpenCategoryManager={() => {
+                setIsInputModalOpen(false);
+                setIsCategoryModalOpen(true);
+              }}
             />
           </div>
         </div>
@@ -876,6 +942,17 @@ export default function App() {
         currentSpreadsheetId={spreadsheetId}
         onSelectSpreadsheet={handleSelectSpreadsheet}
         onImportPastedData={handleImportPastedData}
+      />
+
+      {/* Category & Payment Method Management Modal */}
+      <CategoryManagementModal
+        isOpen={isCategoryModalOpen}
+        onClose={() => setIsCategoryModalOpen(false)}
+        categories={customCategories}
+        paymentMethods={customPaymentMethods}
+        onUpdateCategories={handleUpdateCategories}
+        onUpdatePaymentMethods={handleUpdatePaymentMethods}
+        onResetToDefaults={handleResetCategoryDefaults}
       />
 
       {/* GitHub Repository Setup & Deployment Modal */}

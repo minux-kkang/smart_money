@@ -19,6 +19,7 @@ import {
   Loader2,
   CreditCard,
   FileSpreadsheet,
+  Settings,
 } from 'lucide-react';
 import { Transaction, TransactionType, formatShortDate } from '../types/ledger';
 
@@ -33,6 +34,7 @@ interface DashboardProps {
   isRealGoogleConnected: boolean;
   availableCategories?: string[];
   availablePaymentMethods?: string[];
+  onOpenCategoryManager?: () => void;
 }
 
 const CATEGORY_COLORS = [
@@ -61,6 +63,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   isRealGoogleConnected,
   availableCategories = [],
   availablePaymentMethods = [],
+  onOpenCategoryManager,
 }) => {
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('');
@@ -511,9 +514,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <Tag className="w-4 h-4 text-blue-600" />
               <span>카테고리별 지출 순위</span>
             </h3>
-            <span className="text-xs font-bold text-slate-500">
-              총 {categoryStats.list.length}개 항목
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-bold text-slate-500">
+                총 {categoryStats.list.length}개 항목
+              </span>
+              {onOpenCategoryManager && (
+                <button
+                  type="button"
+                  onClick={onOpenCategoryManager}
+                  className="p-1 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-blue-600 transition cursor-pointer"
+                  title="카테고리 및 결제수단 설정"
+                >
+                  <Settings className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Simple Clean Stacked Progress Bar */}

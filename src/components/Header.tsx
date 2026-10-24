@@ -29,6 +29,7 @@ interface HeaderProps {
   onLogout: () => void;
   onRefreshData: () => void;
   isRefreshing?: boolean;
+  onOpenCategoryManager?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -45,6 +46,7 @@ export const Header: React.FC<HeaderProps> = ({
   onLogout,
   onRefreshData,
   isRefreshing = false,
+  onOpenCategoryManager,
 }) => {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
@@ -236,6 +238,19 @@ export const Header: React.FC<HeaderProps> = ({
 
               {moreMenuOpen && (
                 <div className="absolute right-0 mt-2 w-52 bg-white rounded-2xl shadow-xl border border-slate-100 py-1.5 z-50 text-xs">
+                  {onOpenCategoryManager && (
+                    <button
+                      onClick={() => {
+                        setMoreMenuOpen(false);
+                        onOpenCategoryManager();
+                      }}
+                      className="w-full text-left px-4 py-2.5 text-slate-800 hover:bg-blue-50 flex items-center gap-2 cursor-pointer border-b border-slate-100 font-bold"
+                    >
+                      <Tag className="w-4 h-4 text-blue-600" />
+                      <span>카테고리 & 결제수단 설정</span>
+                    </button>
+                  )}
+
                   {spreadsheetUrl && (
                     <a
                       href={spreadsheetUrl}
