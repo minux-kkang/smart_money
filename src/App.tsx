@@ -297,7 +297,7 @@ export default function App() {
       setActiveTab('monthly');
     }
 
-    if (isRealGoogleConnected && accessToken) {
+    if (isRealGoogleConnected) {
       loadSheetData(spreadsheetId, title, accessToken);
     } else {
       const match = title.match(/(\d+)월/);

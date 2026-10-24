@@ -1212,13 +1212,21 @@ export function normalizeDateString(raw: string): string | null {
     }
   }
 
-  // 2. Korean date formats: (2026년) 10월 15일 or 10월 15일
-  const korMatch = str.match(/(?:(?:\d{4}|\d{2})년\s*)?(\d{1,2})월\s*(\d{1,2})일?/);
-  if (korMatch) {
-    let y = korMatch[1] ? (korMatch[1].length === 2 ? `20${korMatch[1]}` : korMatch[1]) : '2026';
-    const m = korMatch[2].padStart(2, '0');
-    const d = korMatch[3].padStart(2, '0');
+  // 2. Korean date formats: "2026년 10월 15일", "26년 10월 15일", "10월 15일"
+  const korWithYearMatch = str.match(/(\d{2,4})년\s*(\d{1,2})월\s*(\d{1,2})일?/);
+  if (korWithYearMatch) {
+    const y = korWithYearMatch[1].length === 2 ? `20${korWithYearMatch[1]}` : korWithYearMatch[1];
+    const m = korWithYearMatch[2].padStart(2, '0');
+    const d = korWithYearMatch[3].padStart(2, '0');
     return `${y}-${m}-${d}`;
+  }
+
+  const korNoYearMatch = str.match(/^(\d{1,2})월\s*(\d{1,2})일?/);
+  if (korNoYearMatch) {
+    const curYear = new Date().getFullYear();
+    const m = korNoYearMatch[1].padStart(2, '0');
+    const d = korNoYearMatch[2].padStart(2, '0');
+    return `${curYear}-${m}-${d}`;
   }
 
   // 3. Matches 4-digit year with flexible spacing & separators: "2026. 10. 15.", "2026-10-15", "2026/10/15"

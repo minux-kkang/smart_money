@@ -228,16 +228,29 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
         // Month filter
         if (selectedMonthFilter !== 'all') {
-          const mStr = selectedMonthFilter.padStart(2, '0');
-          const matchMonth =
+          const mNum = parseInt(selectedMonthFilter, 10);
+          const mStr = String(mNum).padStart(2, '0');
+
+          const matchDate =
             t.date.includes(`-${mStr}-`) ||
             t.date.includes(`.${mStr}.`) ||
             t.date.includes(`/${mStr}/`) ||
             t.date.startsWith(`${mStr}.`) ||
             t.date.startsWith(`${mStr}-`) ||
-            t.date.startsWith(`${mStr}/`) ||
-            t.sheetTitle?.includes(`${selectedMonthFilter}월`);
-          if (!matchMonth) return false;
+            t.date.startsWith(`${mStr}/`);
+
+          if (matchDate) {
+            // Strictly matched date
+          } else {
+            // If date contains an explicit different month, reject it
+            const explicitMonth = t.date.match(/[-.\/](\d{1,2})[-.\/]/);
+            if (explicitMonth && parseInt(explicitMonth[1], 10) !== mNum) {
+              return false;
+            }
+            if (!t.sheetTitle?.includes(`${mNum}월`)) {
+              return false;
+            }
+          }
         }
 
         if (searchQuery.trim()) {
@@ -642,7 +655,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
               return (
                 <button
                   key={m}
-                  onClick={() => setSelectedMonthFilter(String(m))}
+                  onClick={() => {
+                    setSelectedMonthFilter(String(m));
+                    if (onSelectSheetTab) {
+                      onSelectSheetTab(`${m}월`);
+                    }
+                  }}
                   className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer shrink-0 ${
                     selectedMonthFilter === String(m)
                       ? 'bg-blue-600 text-white shadow-xs'
