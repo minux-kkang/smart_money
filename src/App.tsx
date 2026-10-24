@@ -647,99 +647,77 @@ export default function App() {
       />
 
       {/* Main Content Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        {/* Connection & Data Status Banner */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-3.5 sm:py-5 space-y-3.5 sm:space-y-4">
+        {/* Compact Connection & Data Status Bar */}
         {!isRealGoogleConnected ? (
-          <div className="p-4 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-indigo-800 text-white shadow-lg shadow-blue-500/15 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-white/20 rounded-xl shrink-0 backdrop-blur-xs">
-                <Sparkles className="w-5 h-5 text-yellow-300" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h4 className="text-sm font-bold">
-                    {user
-                      ? `${user.displayName || user.email?.split('@')[0]}님 구글 계정 인증됨`
-                      : '샘플 가계부 모드 체험 중'}
-                  </h4>
-                  <span
-                    className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
-                      user ? 'bg-emerald-400 text-slate-900' : 'bg-yellow-400 text-slate-900'
-                    }`}
-                  >
-                    {user ? '구글 로그인 완료' : '미연동 (샘플 데이터)'}
-                  </span>
-                </div>
-                <p className="text-xs text-blue-100 mt-1 leading-relaxed">
-                  {user
-                    ? '구글 계정이 인증되었습니다! 이제 [내 가계부 시트 선택하기]를 눌러 구글 드라이브의 실제 가계부를 연결해 주세요.'
-                    : '현재 화면의 상세 내역은 샘플 데이터입니다. Google 드라이브에 보관된 본인의 가계부 시트를 직접 연결하시려면 로그인 후 시트를 선택해 주세요.'}
-                </p>
-              </div>
+          <div className="px-3 py-2 bg-blue-50/90 border border-blue-200/80 rounded-xl text-xs flex items-center justify-between gap-2 shadow-2xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+              <span className="font-bold text-blue-900 shrink-0 text-xs">
+                {user ? '구글 계정 인증됨' : '샘플 데이터 모드'}
+              </span>
+              <span className="hidden sm:inline text-slate-500 text-[11px] truncate">
+                {user
+                  ? '내 Google 드라이브 가계부 시트를 선택해 실시간 연동하세요.'
+                  : '실제 구글 시트 연동 또는 샘플 데이터로 기능 체험이 가능합니다.'}
+              </span>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 shrink-0">
               <button
                 onClick={() => setIsPickerOpen(true)}
-                className="px-3.5 py-2 bg-white/20 hover:bg-white/30 text-white rounded-xl text-xs font-bold transition cursor-pointer"
+                className="px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[11px] font-bold transition cursor-pointer"
               >
-                직접 등록 / 붙여넣기
+                직접 등록
               </button>
               {user ? (
                 <button
                   onClick={() => setIsPickerOpen(true)}
-                  className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-black shadow-md transition active:scale-95 cursor-pointer shrink-0"
+                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[11px] font-bold shadow-xs transition active:scale-95 cursor-pointer"
                 >
-                  내 가계부 시트 선택하기
+                  시트 선택
                 </button>
               ) : (
                 <button
                   onClick={handleLogin}
                   disabled={isLoggingIn}
-                  className="px-4 py-2 bg-white text-blue-700 hover:bg-blue-50 rounded-xl text-xs font-black shadow-md transition active:scale-95 cursor-pointer shrink-0"
+                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[11px] font-bold shadow-xs transition active:scale-95 cursor-pointer"
                 >
-                  {isLoggingIn ? 'Google 연결 중...' : 'Google 계정으로 연동하기'}
+                  {isLoggingIn ? '연결 중...' : 'Google 로그인'}
                 </button>
               )}
             </div>
           </div>
         ) : (
-          <div className="p-4 rounded-2xl bg-emerald-700 text-white shadow-lg shadow-emerald-700/15 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-white/20 rounded-xl shrink-0 backdrop-blur-xs">
-                <FileSpreadsheet className="w-5 h-5 text-white" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h4 className="text-sm font-bold">Google 시트 실시간 연동 완료</h4>
-                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-300 text-emerald-950">
-                    실제 구글 드라이브 동기화 중
-                  </span>
-                </div>
-                <p className="text-xs text-emerald-100 mt-1 leading-relaxed">
-                  연결된 파일: <strong>{spreadsheetTitle}</strong> | 현재 시트 탭: <strong>{activeSheetTitle}</strong>
-                  {analysis.isMatrixSheet
-                    ? ' (연간 요약 매트릭스 표가 감지되었습니다)'
-                    : ` (총 ${transactions.length}건의 거래 내역 로드됨)`}
-                </p>
-              </div>
+          <div className="px-3 py-2 bg-emerald-50/90 border border-emerald-200/80 rounded-xl text-xs flex items-center justify-between gap-2 shadow-2xs">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+              <span className="font-bold text-emerald-900 shrink-0 text-xs">실시간 동기화</span>
+              <span className="text-slate-400 shrink-0 hidden sm:inline">|</span>
+              <span className="font-semibold text-slate-700 truncate max-w-[140px] sm:max-w-[280px]" title={spreadsheetTitle}>
+                {spreadsheetTitle}
+              </span>
+              <span className="hidden md:inline text-[11px] text-emerald-700 font-medium shrink-0">
+                ({activeSheetTitle} • {analysis.isMatrixSheet ? '연간 요약 매트릭스' : `${transactions.length}건`})
+              </span>
             </div>
-            <div className="flex items-center gap-2 shrink-0">
+            <div className="flex items-center gap-1.5 shrink-0">
               {spreadsheetUrl && (
                 <a
                   href={spreadsheetUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="px-3 py-2 bg-white/20 hover:bg-white/30 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+                  className="px-2 py-1 bg-white hover:bg-emerald-100/70 border border-emerald-200 text-emerald-800 rounded-lg text-[11px] font-bold transition flex items-center gap-1"
+                  title="Google Sheets 원본 열기"
                 >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  <span>Google Sheets 열기</span>
+                  <ExternalLink className="w-3 h-3" />
+                  <span className="hidden xs:inline">시트 열기</span>
                 </a>
               )}
               <button
                 onClick={() => setIsPickerOpen(true)}
-                className="px-3.5 py-2 bg-white text-emerald-800 hover:bg-emerald-50 rounded-xl text-xs font-black shadow-xs transition cursor-pointer"
+                className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[11px] font-bold transition cursor-pointer"
               >
-                다른 시트 선택
+                시트 변경
               </button>
             </div>
           </div>
@@ -747,7 +725,7 @@ export default function App() {
 
         {/* Error Notice */}
         {errorNotice && (
-          <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center justify-between gap-3">
+          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center justify-between gap-3">
             <div className="flex items-center gap-2">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
               <span>{errorNotice}</span>
@@ -760,42 +738,6 @@ export default function App() {
             </button>
           </div>
         )}
-
-        {/* Top Quick Entry Action Bar (Requested: 최상단에서 입력받기) */}
-        <div className="bg-white rounded-2xl border-2 border-slate-300 p-4 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-black shadow-md">
-              <Plus className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-sm sm:text-base font-black text-slate-900">가계부 빠른 입력</h3>
-                <span className="text-xs font-black px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
-                  날짜 기준 해당 월 자동 누적
-                </span>
-              </div>
-              <p className="text-xs text-slate-600 mt-0.5">
-                지출 날짜를 선택하시면 해당 월 시트와 연간 대시보드에 즉시 자동 누적 집계됩니다.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <button
-              onClick={() => setIsInputExpanded(!isInputExpanded)}
-              className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-bold border-2 border-slate-300 bg-slate-50 hover:bg-slate-100 text-slate-800 transition cursor-pointer"
-            >
-              {isInputExpanded ? '상단 입력창 접기 ▲' : '상단에 펼치기 ▼'}
-            </button>
-            <button
-              onClick={() => setIsInputModalOpen(true)}
-              className="flex-1 sm:flex-none px-5 py-2.5 rounded-xl text-xs sm:text-sm font-black bg-blue-600 hover:bg-blue-700 text-white shadow-md transition active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
-            >
-              <Plus className="w-4 h-4" />
-              <span>팝업으로 입력하기</span>
-            </button>
-          </div>
-        </div>
 
         {/* Optional Expanded Input Form right at the top */}
         {isInputExpanded && (
@@ -811,51 +753,61 @@ export default function App() {
           </div>
         )}
 
-        {/* View Tabs Selector */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
+        {/* Sleek Segmented View Switcher & Action Bar */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          {/* Segmented Control Tabs */}
+          <div className="flex items-center p-1 bg-slate-100 rounded-xl border border-slate-200/80 w-full sm:w-auto overflow-x-auto scrollbar-none">
             <button
               onClick={() => setActiveTab('matrix')}
-              className={`flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer ${
+              className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
                 activeTab === 'matrix'
-                  ? 'bg-slate-900 text-white shadow-md'
-                  : 'bg-white text-slate-700 hover:text-slate-900 border-2 border-slate-200'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <BarChart3 className="w-4 h-4 text-emerald-400" />
-              <span>2026 연간 요약 매트릭스</span>
+              <BarChart3 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              <span>연간 매트릭스</span>
             </button>
 
             <button
               onClick={() => setActiveTab('monthly')}
-              className={`flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer ${
+              className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
                 activeTab === 'monthly'
-                  ? 'bg-slate-900 text-white shadow-md'
-                  : 'bg-white text-slate-700 hover:text-slate-900 border-2 border-slate-200'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <Calendar className="w-4 h-4 text-blue-400" />
-              <span>월별 지출 상세 관리 ({activeSheetTitle})</span>
+              <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+              <span>월별 가계부 ({activeSheetTitle})</span>
             </button>
 
             <button
               onClick={() => setActiveTab('analyzer')}
-              className={`flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-black transition cursor-pointer ${
+              className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
                 activeTab === 'analyzer'
-                  ? 'bg-slate-900 text-white shadow-md'
-                  : 'bg-white text-slate-700 hover:text-slate-900 border-2 border-slate-200'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              <SearchCode className="w-4 h-4 text-purple-400" />
-              <span>스프레드시트 구조 분석</span>
+              <SearchCode className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+              <span>시트 분석</span>
             </button>
           </div>
 
-          <div className="flex items-center gap-2 text-xs text-slate-600 font-bold">
-            <span>현재 조회 월:</span>
-            <span className="font-black text-blue-700 bg-white px-3 py-1.5 rounded-lg border-2 border-slate-200">
-              {spreadsheetTitle} &gt; {activeSheetTitle}
-            </span>
+          {/* Quick Action: Inline Form Toggle & Current Sheet Info */}
+          <div className="flex items-center justify-between sm:justify-end gap-2 text-xs">
+            <button
+              onClick={() => setIsInputExpanded(!isInputExpanded)}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 transition cursor-pointer shadow-2xs"
+            >
+              <Plus className="w-3.5 h-3.5 text-blue-600" />
+              <span>{isInputExpanded ? '입력창 접기 ▲' : '상단 빠른 입력 ▼'}</span>
+            </button>
+
+            <div className="flex items-center gap-1 text-[11px] text-slate-500 font-semibold truncate max-w-[180px] sm:max-w-none">
+              <span className="text-slate-400">조회:</span>
+              <span className="font-bold text-slate-700 truncate">{activeSheetTitle}</span>
+            </div>
           </div>
         </div>
 

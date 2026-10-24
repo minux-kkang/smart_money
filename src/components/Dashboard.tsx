@@ -422,73 +422,81 @@ export const Dashboard: React.FC<DashboardProps> = ({
   return (
     <div className="space-y-6">
       {/* 1. Monthly Summary Stat Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
         {/* Total Expense */}
-        <div className="p-5 bg-white rounded-2xl border-2 border-slate-200 shadow-sm flex items-center justify-between">
-          <div>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              {activeSheetTitle} 총 지출
+        <div className="p-3 sm:p-5 bg-white rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
+              {activeSheetTitle} 지출
             </p>
-            <h4 className="text-2xl font-black text-rose-600 mt-1">
+            <h4 className="text-base sm:text-2xl font-black text-rose-600 mt-0.5 sm:mt-1 truncate">
               {metrics.totalExpense.toLocaleString('ko-KR')}원
             </h4>
-            <p className="text-[11px] font-semibold text-slate-500 mt-1">
-              일 평균 {metrics.dailyAverageExpense.toLocaleString('ko-KR')}원 지출
+            <p className="text-[10px] sm:text-[11px] font-semibold text-slate-400 mt-0.5 truncate hidden xs:block">
+              일 평균 {metrics.dailyAverageExpense.toLocaleString('ko-KR')}원
             </p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-rose-50 flex items-center justify-center text-rose-600 shrink-0">
-            <TrendingDown className="w-6 h-6" />
+          <div className="w-8 h-8 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl bg-rose-50 flex items-center justify-center text-rose-600 shrink-0 self-end sm:self-auto">
+            <TrendingDown className="w-4 h-4 sm:w-6 sm:h-6" />
           </div>
         </div>
 
         {/* Total Income */}
-        <div className="p-5 bg-white rounded-2xl border-2 border-slate-200 shadow-sm flex items-center justify-between">
-          <div>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              {activeSheetTitle} 총 수입
+        <div className="p-3 sm:p-5 bg-white rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
+              {activeSheetTitle} 수입
             </p>
-            <h4 className="text-2xl font-black text-emerald-600 mt-1">
+            <h4 className="text-base sm:text-2xl font-black text-emerald-600 mt-0.5 sm:mt-1 truncate">
               {metrics.totalIncome.toLocaleString('ko-KR')}원
             </h4>
-            <p className="text-[11px] font-semibold text-slate-500 mt-1">
-              저축/잉여율 {metrics.savingRate}% 달성
+            <p className="text-[10px] sm:text-[11px] font-semibold text-slate-400 mt-0.5 truncate hidden xs:block">
+              저축률 {metrics.savingRate}%
             </p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 shrink-0">
-            <TrendingUp className="w-6 h-6" />
+          <div className="w-8 h-8 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600 shrink-0 self-end sm:self-auto">
+            <TrendingUp className="w-4 h-4 sm:w-6 sm:h-6" />
           </div>
         </div>
 
         {/* Net Balance */}
-        <div className="p-5 bg-white rounded-2xl border-2 border-slate-200 shadow-sm flex items-center justify-between">
-          <div>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">이달의 잔액</p>
+        <div className="p-3 sm:p-5 bg-white rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
+              이달 잔액
+            </p>
             <h4
-              className={`text-2xl font-black mt-1 ${
+              className={`text-base sm:text-2xl font-black mt-0.5 sm:mt-1 truncate ${
                 metrics.balance >= 0 ? 'text-blue-600' : 'text-rose-600'
               }`}
             >
               {metrics.balance >= 0 ? '+' : ''}
               {metrics.balance.toLocaleString('ko-KR')}원
             </h4>
-            <p className="text-[11px] font-semibold text-slate-500 mt-1">수입 대비 지출 차액</p>
+            <p className="text-[10px] sm:text-[11px] font-semibold text-slate-400 mt-0.5 truncate hidden xs:block">
+              수입 대비 차액
+            </p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 shrink-0">
-            <PiggyBank className="w-6 h-6" />
+          <div className="w-8 h-8 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 shrink-0 self-end sm:self-auto">
+            <PiggyBank className="w-4 h-4 sm:w-6 sm:h-6" />
           </div>
         </div>
 
         {/* Transaction Count */}
-        <div className="p-5 bg-white rounded-2xl border-2 border-slate-200 shadow-sm flex items-center justify-between">
-          <div>
-            <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">기록 건수</p>
-            <h4 className="text-2xl font-black text-slate-900 mt-1">{metrics.count}건</h4>
-            <p className="text-[11px] font-semibold text-slate-500 mt-1">
-              {isRealGoogleConnected ? 'Google 시트 실시간 연동' : '샘플 데이터 모드'}
+        <div className="p-3 sm:p-5 bg-white rounded-xl sm:rounded-2xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[11px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider truncate">
+              기록 건수
+            </p>
+            <h4 className="text-base sm:text-2xl font-black text-slate-900 mt-0.5 sm:mt-1 truncate">
+              {metrics.count}건
+            </h4>
+            <p className="text-[10px] sm:text-[11px] font-semibold text-slate-400 mt-0.5 truncate hidden xs:block">
+              {isRealGoogleConnected ? '실시간 연동' : '샘플 모드'}
             </p>
           </div>
-          <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700 shrink-0">
-            <Calendar className="w-6 h-6" />
+          <div className="w-8 h-8 sm:w-12 sm:h-12 rounded-lg sm:rounded-xl bg-slate-100 flex items-center justify-center text-slate-700 shrink-0 self-end sm:self-auto">
+            <Calendar className="w-4 h-4 sm:w-6 sm:h-6" />
           </div>
         </div>
       </div>

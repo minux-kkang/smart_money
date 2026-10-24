@@ -47,55 +47,55 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
   const savingRate = yearData.totalIncome > 0 ? Math.round((balance / yearData.totalIncome) * 100) : 0;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       {/* 2026 Annual Overview Summary Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-500">2026 연간 총 수입</span>
-            <div className="p-2 rounded-xl bg-emerald-100 text-emerald-700">
-              <TrendingUp className="w-5 h-5" />
+      <div className="grid grid-cols-1 xs:grid-cols-3 gap-2.5 sm:gap-4">
+        <div className="p-3 sm:p-5 rounded-xl sm:rounded-2xl bg-white border border-slate-200 shadow-2xs">
+          <div className="flex items-center justify-between mb-1 sm:mb-2">
+            <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">연간 총 수입</span>
+            <div className="p-1 sm:p-1.5 rounded-lg bg-emerald-100 text-emerald-700 shrink-0">
+              <TrendingUp className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
-          <div className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
+          <div className="text-base sm:text-2xl font-black text-slate-900 tracking-tight truncate">
             {yearData.totalIncome.toLocaleString('ko-KR')}
-            <span className="text-sm font-semibold text-slate-500 ml-1">원</span>
+            <span className="text-[11px] sm:text-xs font-semibold text-slate-500 ml-0.5">원</span>
           </div>
-          <p className="mt-1 text-xs text-slate-500 font-medium">
-            2026 가계부 Dashboard 기준
+          <p className="mt-0.5 text-[10px] sm:text-xs text-slate-400 font-medium truncate hidden xs:block">
+            Dashboard 기준
           </p>
         </div>
 
-        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-500">2026 연간 총 지출</span>
-            <div className="p-2 rounded-xl bg-rose-100 text-rose-700">
-              <TrendingDown className="w-5 h-5" />
+        <div className="p-3 sm:p-5 rounded-xl sm:rounded-2xl bg-white border border-slate-200 shadow-2xs">
+          <div className="flex items-center justify-between mb-1 sm:mb-2">
+            <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">연간 총 지출</span>
+            <div className="p-1 sm:p-1.5 rounded-lg bg-rose-100 text-rose-700 shrink-0">
+              <TrendingDown className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
-          <div className="text-xl sm:text-2xl font-black text-rose-600 tracking-tight">
+          <div className="text-base sm:text-2xl font-black text-rose-600 tracking-tight truncate">
             {yearData.totalExpense.toLocaleString('ko-KR')}
-            <span className="text-sm font-semibold text-slate-500 ml-1">원</span>
+            <span className="text-[11px] sm:text-xs font-semibold text-slate-500 ml-0.5">원</span>
           </div>
-          <p className="mt-1 text-xs text-slate-500 font-medium">
-            1월~12월 누적 지출 합계
+          <p className="mt-0.5 text-[10px] sm:text-xs text-slate-400 font-medium truncate hidden xs:block">
+            1~12월 누적 지출
           </p>
         </div>
 
-        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-sm">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold text-slate-500">2026 연간 누적 잔액</span>
-            <div className="p-2 rounded-xl bg-blue-100 text-blue-700">
-              <PiggyBank className="w-5 h-5" />
+        <div className="p-3 sm:p-5 rounded-xl sm:rounded-2xl bg-white border border-slate-200 shadow-2xs">
+          <div className="flex items-center justify-between mb-1 sm:mb-2">
+            <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">누적 잔액</span>
+            <div className="p-1 sm:p-1.5 rounded-lg bg-blue-100 text-blue-700 shrink-0">
+              <PiggyBank className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </div>
           </div>
-          <div className="text-xl sm:text-2xl font-black text-blue-600 tracking-tight">
+          <div className="text-base sm:text-2xl font-black text-blue-600 tracking-tight truncate">
             {balance.toLocaleString('ko-KR')}
-            <span className="text-sm font-semibold text-slate-500 ml-1">원</span>
+            <span className="text-[11px] sm:text-xs font-semibold text-slate-500 ml-0.5">원</span>
           </div>
-          <div className="mt-1 flex items-center gap-1.5 text-xs">
-            <span className="text-slate-500">연간 저축률:</span>
-            <span className="font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-md">
+          <div className="mt-0.5 flex items-center gap-1 text-[10px] sm:text-xs">
+            <span className="text-slate-400 hidden xs:inline">저축률:</span>
+            <span className="font-bold text-blue-700 bg-blue-100 px-1.5 py-0.2 rounded">
               {savingRate}%
             </span>
           </div>
