@@ -12,6 +12,7 @@ import {
   ShoppingBag,
   ArrowRight,
   Calculator,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { SubItem, Transaction, formatShortDate } from '../types/ledger';
 import { serializeSubItemsToMemo } from '../services/subItemStorage';
@@ -377,6 +378,39 @@ export const SubItemModal: React.FC<SubItemModalProps> = ({
                 )}
               </div>
             )}
+          </div>
+
+          {/* 엑셀 / 구글 시트 저장 미리보기 안내 */}
+          <div className="p-2.5 sm:p-3 bg-white rounded-xl border border-slate-200 shadow-xs space-y-1.5 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-1 font-bold text-slate-700">
+              <span className="flex items-center gap-1.5 text-emerald-700">
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                <span>엑셀 / Google 시트 반영 미리보기</span>
+              </span>
+              <span className="text-[10px] text-slate-500 font-medium bg-slate-100 px-2 py-0.5 rounded-full">
+                카드 청구서 승인 1건과 1:1 일치
+              </span>
+            </div>
+            <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200/90 text-[11px] leading-relaxed space-y-1 font-sans">
+              <div className="text-slate-600">
+                <span className="font-bold text-slate-700">구글 시트 행:</span>{' '}
+                <span className="font-mono text-slate-800">
+                  {transaction.date} | [{transaction.category}] {transaction.description} | {parentAmount.toLocaleString('ko-KR')}원 ({transaction.paymentMethod || '카드'})
+                </span>
+              </div>
+              <div className="text-slate-700 pt-0.5 border-t border-slate-200/80">
+                <span className="font-bold text-blue-700">시트 메모(비고) 열:</span>{' '}
+                <span className="font-mono text-blue-900 bg-blue-50/70 px-1.5 py-0.5 rounded border border-blue-200/70 inline-block mt-0.5 break-all">
+                  {serializeSubItemsToMemo(
+                    transaction.memo,
+                    subItems.filter((s) => s.name.trim() || s.amount > 0)
+                  ) || '(세부 품목 없음)'}
+                </span>
+              </div>
+            </div>
+            <p className="text-[10.5px] text-slate-500 leading-tight">
+              💡 <strong>개별 카테고리 보존:</strong> 각 세부 품목마다 지정한 카테고리(식비, 생활용품 등)는 엑셀 메모란에 <code>품목명(카테고리) 금액</code> 형식으로 함께 기록되어 영수증 세부 내역이 구글 시트 원본에도 그대로 남습니다.
+            </p>
           </div>
 
           {/* Action buttons */}
