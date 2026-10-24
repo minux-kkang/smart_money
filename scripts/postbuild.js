@@ -34,8 +34,22 @@ function copyDir(src, dest) {
 // 1. Copy dist to docs for GitHub Pages (/docs deployment)
 copyDir(distDir, docsDir);
 
-// 2. Add .nojekyll to docs to prevent GitHub Pages Jekyll processing
+// 2. Add .nojekyll to docs and root to prevent GitHub Pages Jekyll processing
 fs.writeFileSync(path.join(docsDir, '.nojekyll'), '');
+fs.writeFileSync(path.join(rootDir, '.nojekyll'), '');
+
+// Strip redirect script from docs/index.html so /docs deployment won't 404
+try {
+  let docsHtml = fs.readFileSync(path.join(docsDir, 'index.html'), 'utf8');
+  docsHtml = docsHtml.replace(/<script>[\s\S]*?window\.location\.replace\('\.\/docs\/'\)[\s\S]*?<\/script>/gi, '');
+  fs.writeFileSync(path.join(docsDir, 'index.html'), docsHtml);
+
+  let distHtml = fs.readFileSync(path.join(distDir, 'index.html'), 'utf8');
+  distHtml = distHtml.replace(/<script>[\s\S]*?window\.location\.replace\('\.\/docs\/'\)[\s\S]*?<\/script>/gi, '');
+  fs.writeFileSync(path.join(distDir, 'index.html'), distHtml);
+} catch (e) {
+  console.error('Error stripping redirect script:', e);
+}
 
 // 3. Generate Single-File Standalone HTML
 try {

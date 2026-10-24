@@ -16,7 +16,7 @@
       // When accessed on GitHub Pages root, redirect to compiled web app in ./docs/
       if (
         window.location.hostname.includes('github.io') &&
-        !window.location.pathname.includes('/docs/')
+        !window.location.pathname.includes('/docs')
       ) {
         window.location.replace('./docs/');
       }
