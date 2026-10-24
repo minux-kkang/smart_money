@@ -146,6 +146,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const handleSaveSubItems = async (updatedTx: Transaction) => {
     saveSubItemsForTransaction(updatedTx, updatedTx.subItems || []);
     await onEditTransaction(updatedTx);
+    if (editModalTx && editModalTx.id === updatedTx.id) {
+      setEditModalTx(updatedTx);
+      setEditForm((prev) => ({
+        ...prev,
+        amount: updatedTx.amount,
+        memo: updatedTx.memo,
+        subItems: updatedTx.subItems,
+      }));
+    }
     setSubItemModalTx(null);
   };
 
@@ -963,23 +972,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               </span>
                             )}
 
-                            {/* 세부내역 묶음 박스 (Sub-items Enclosed Box) */}
-                            {t.subItems && t.subItems.length > 0 ? (
+                            {/* 세부내역 묶음 박스 (Sub-items Enclosed Box - 세부 품목이 있는 경우에만 깔끔하게 노출) */}
+                            {t.subItems && t.subItems.length > 0 && (
                               <div
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setSubItemModalTx(t);
+                                  handleOpenEditModal(t);
                                 }}
                                 className="mt-2 p-2.5 bg-slate-50/90 hover:bg-blue-50/50 border border-slate-200 hover:border-blue-300 rounded-xl space-y-1.5 transition cursor-pointer shadow-xs group/box"
+                                title="클릭하여 항목 수정 화면 열기"
                               >
                                 <div className="flex items-center justify-between text-[11px] font-black text-slate-700 pb-1 border-b border-slate-200/80">
                                   <span className="flex items-center gap-1.5 text-blue-700">
                                     <Package className="w-3.5 h-3.5 text-blue-600" />
                                     <span>세부 품목 ({t.subItems.length}개)</span>
                                   </span>
-                                  <span className="text-[10px] text-blue-600 group-hover/box:underline flex items-center gap-1 font-bold">
+                                  <span className="text-[10px] text-slate-400 group-hover/box:text-blue-600 flex items-center gap-1 font-bold">
                                     <Edit2 className="w-2.5 h-2.5" />
-                                    <span>세부내역 편집</span>
+                                    <span>수정</span>
                                   </span>
                                 </div>
 
@@ -1007,26 +1017,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   ))}
                                 </div>
                               </div>
-                            ) : (
-                              /* Quick Sub-item Entry Button for multi-item stores or hover */
-                              (/쿠팡|네이버|마트|쇼핑|이마트|배달|홈플러스|다이소|마켓|배민|편의점|몰/i.test(
-                                t.description
-                              ) ||
-                                /생활용품|식비|간식/i.test(t.category)) && (
-                                <div className="mt-1.5">
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setSubItemModalTx(t);
-                                    }}
-                                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-50 hover:bg-blue-100 border border-blue-200 text-[10px] font-bold text-blue-700 transition cursor-pointer"
-                                  >
-                                    <Layers className="w-3 h-3 text-blue-600" />
-                                    <span>+ 품목별 세부내역 입력</span>
-                                  </button>
-                                </div>
-                              )
                             )}
                           </div>
                         </td>
@@ -1052,32 +1042,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           {t.paymentMethod || '-'}
                         </td>
 
-                        {/* 관리 (Actions) */}
+                        {/* 관리 (Actions) - 깔끔하게 수정 및 삭제만 유지 */}
                         <td className="py-2.5 px-1 sm:px-2 text-center whitespace-nowrap align-top">
                           <div
                             className="flex items-center justify-center gap-0.5 sm:gap-1"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            {/* Sub-item trigger button */}
-                            <button
-                              onClick={() => setSubItemModalTx(t)}
-                              className={`p-1 sm:p-1.5 rounded-lg transition cursor-pointer ${
-                                t.subItems && t.subItems.length > 0
-                                  ? 'text-blue-600 bg-blue-50 hover:bg-blue-100 ring-1 ring-blue-300'
-                                  : 'text-slate-400 hover:text-blue-600 hover:bg-blue-50'
-                              }`}
-                              title={
-                                t.subItems && t.subItems.length > 0
-                                  ? `품목별 세부내역 (${t.subItems.length}개) 관리`
-                                  : '품목별 세부내역 추가'
-                              }
-                            >
-                              <Layers className="w-3.5 h-3.5" />
-                            </button>
                             <button
                               onClick={() => handleOpenEditModal(t)}
                               className="p-1 sm:p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition cursor-pointer"
-                              title="Google 시트 내용 수정"
+                              title="항목 수정"
                             >
                               <Edit2 className="w-3.5 h-3.5" />
                             </button>
@@ -1474,35 +1448,76 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 />
               </div>
 
-              {/* Row 7: Sub-items Breakdown Shortcut */}
-              <div className="pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const currentTx: Transaction = {
-                      ...editModalTx,
-                      date: editForm.date || editModalTx.date,
-                      type: editForm.type || editModalTx.type,
-                      category: editForm.category || editModalTx.category,
-                      description: (editForm.description || editModalTx.description).trim(),
-                      amount: Number(editForm.amount) || editModalTx.amount,
-                      paymentMethod: editForm.paymentMethod || editModalTx.paymentMethod,
-                      memo: editForm.memo || editModalTx.memo,
-                    };
-                    setSubItemModalTx(currentTx);
-                  }}
-                  className="w-full py-2.5 px-3 bg-blue-50 hover:bg-blue-100/80 border border-blue-200 rounded-xl text-xs font-bold text-blue-800 flex items-center justify-between transition cursor-pointer"
-                >
-                  <span className="flex items-center gap-2">
-                    <Layers className="w-4 h-4 text-blue-600" />
-                    <span>
-                      품목별 세부내역 ({editModalTx.subItems?.length || 0}개) 편집/입력
-                    </span>
-                  </span>
-                  <span className="text-[11px] text-blue-600 font-extrabold flex items-center gap-0.5">
-                    열기 &gt;
-                  </span>
-                </button>
+              {/* Row 7: Sub-items Breakdown Section (항목 수정 화면 전용) */}
+              <div className="pt-2 border-t border-slate-200">
+                <div className="p-3.5 bg-blue-50/50 border border-blue-200 rounded-xl space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 font-black text-slate-800 text-xs">
+                      <div className="w-5 h-5 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold">
+                        <Layers className="w-3.5 h-3.5" />
+                      </div>
+                      <span>품목별 세부내역 관리</span>
+                      {editModalTx.subItems && editModalTx.subItems.length > 0 && (
+                        <span className="text-[10px] font-black text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full border border-blue-200">
+                          {editModalTx.subItems.length}개 품목 등록됨
+                        </span>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const currentTx: Transaction = {
+                          ...editModalTx,
+                          date: editForm.date || editModalTx.date,
+                          type: editForm.type || editModalTx.type,
+                          category: editForm.category || editModalTx.category,
+                          description: (editForm.description || editModalTx.description).trim(),
+                          amount: Number(editForm.amount) || editModalTx.amount,
+                          paymentMethod: editForm.paymentMethod || editModalTx.paymentMethod,
+                          memo: editForm.memo || editModalTx.memo,
+                        };
+                        setSubItemModalTx(currentTx);
+                      }}
+                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-black transition cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95"
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>
+                        {editModalTx.subItems && editModalTx.subItems.length > 0
+                          ? '세부내역 편집 / 품목 추가'
+                          : '+ 품목별 세부내역 입력하기'}
+                      </span>
+                    </button>
+                  </div>
+
+                  {editModalTx.subItems && editModalTx.subItems.length > 0 ? (
+                    <div className="space-y-1 bg-white p-2.5 rounded-lg border border-blue-100 text-xs max-h-36 overflow-y-auto">
+                      {editModalTx.subItems.map((sub, sIdx) => (
+                        <div
+                          key={sub.id || sIdx}
+                          className="flex items-center justify-between py-1 border-b border-slate-100 last:border-b-0 text-[11px]"
+                        >
+                          <div className="flex items-center gap-1.5 min-w-0 pr-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-blue-500 shrink-0" />
+                            <span className="font-semibold text-slate-800 truncate">{sub.name}</span>
+                            {sub.category && (
+                              <span className="text-[9px] font-bold text-slate-500 bg-slate-50 border border-slate-200 px-1.5 py-0.2 rounded shrink-0">
+                                {sub.category}
+                              </span>
+                            )}
+                          </div>
+                          <span className="font-bold text-slate-700 font-mono shrink-0">
+                            {sub.amount.toLocaleString('ko-KR')}원
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
+                      쿠팡, 네이버쇼핑, 마트 등 한 번에 여러 물품을 결제한 경우 <strong>품목별 세부내역 입력하기</strong>를 눌러 각 품목명, 개별 카테고리, 금액을 세부적으로 나누어 기록할 수 있습니다.
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
 
