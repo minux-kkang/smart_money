@@ -194,3 +194,17 @@ export function generateUserMonthlyTransactions(monthIndex: number): any[] {
   return result.sort((a, b) => b.date.localeCompare(a.date));
 }
 
+/**
+ * Generate complete full-year granular transactions (1월 ~ 12월)
+ * Ensures 1월 ~ 9월 are never lost or wiped out when viewing 10월
+ */
+export function generateUserAllTransactions(): any[] {
+  const all: any[] = [];
+  for (let m = 0; m < 12; m++) {
+    const mTx = generateUserMonthlyTransactions(m);
+    all.push(...mTx);
+  }
+  return all.sort((a, b) => b.date.localeCompare(a.date));
+}
+
+

@@ -32,6 +32,7 @@ import {
   USER_2026_DATA,
   YearDashboardData,
   generateUserMonthlyTransactions,
+  generateUserAllTransactions,
   USER_CATEGORIES,
 } from './data/userLedgerData';
 import {
@@ -111,7 +112,7 @@ export default function App() {
     ],
   }));
   const [transactions, setTransactions] = useState<Transaction[]>(() =>
-    generateUserMonthlyTransactions(new Date().getMonth())
+    generateUserAllTransactions()
   );
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
@@ -300,11 +301,6 @@ export default function App() {
     if (isRealGoogleConnected) {
       loadSheetData(spreadsheetId, title, accessToken);
     } else {
-      const match = title.match(/(\d+)월/);
-      if (match) {
-        const mIdx = parseInt(match[1], 10) - 1;
-        setTransactions(generateUserMonthlyTransactions(mIdx));
-      }
       setAnalysis((prev) => ({
         ...prev,
         activeSheetTitle: title,
