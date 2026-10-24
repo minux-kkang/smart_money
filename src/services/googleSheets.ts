@@ -11,31 +11,101 @@ import {
  */
 export async function getSpreadsheetDetails(
   spreadsheetId: string,
-  accessToken: string
+  accessToken?: string | null
 ): Promise<{ title: string; sheets: Array<{ id: number; title: string; index: number }> }> {
-  const res = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=properties.title,sheets.properties(sheetId,title,index)`,
-    {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    }
-  );
+  if (accessToken) {
+    try {
+      const res = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=properties.title,sheets.properties(sheetId,title,index)`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    throw new Error(err?.error?.message || `스프레드시트 정보 조회 실패 (${res.status})`);
+      if (res.ok) {
+        const data = await res.json();
+        const title = data.properties?.title || '가계부 스프레드시트';
+        const sheets = (data.sheets || []).map((s: any) => ({
+          id: s.properties.sheetId,
+          title: s.properties.title,
+          index: s.properties.index,
+        }));
+        return { title, sheets };
+      }
+    } catch (e) {
+      console.warn('OAuth metadata fetch failed, using fallback:', e);
+    }
   }
 
-  const data = await res.json();
-  const title = data.properties?.title || '가계부 스프레드시트';
-  const sheets = (data.sheets || []).map((s: any) => ({
-    id: s.properties.sheetId,
-    title: s.properties.title,
-    index: s.properties.index,
-  }));
+  // Fallback for public link access without OAuth
+  const defaultMonths = ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'];
+  return {
+    title: '연결된 가계부 스프레드시트',
+    sheets: defaultMonths.map((m, i) => ({ id: i + 1, title: m, index: i })),
+  };
+}
 
-  return { title, sheets };
+/**
+ * Fetch public Google Spreadsheet via Google Visualization API (no OAuth or API key required)
+ */
+export async function fetchPublicSheetViaGviz(
+  spreadsheetId: string,
+  sheetTitle?: string
+): Promise<string[][]> {
+  const sheetParam = sheetTitle ? `&sheet=${encodeURIComponent(sheetTitle)}` : '';
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/gviz/tq?tqx=out:json${sheetParam}`;
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(
+      `스프레드시트를 불러오지 못했습니다 (${res.status}). 시트의 공유 설정이 '링크가 있는 모든 사용자: 뷰어'로 되어 있는지 확인해 주세요.`
+    );
+  }
+
+  const rawText = await res.text();
+  const match = rawText.match(/google\.visualization\.Query\.setResponse\(([\s\S]*)\);?/);
+  if (!match || !match[1]) {
+    throw new Error('스프레드시트 응답 형식을 해석할 수 없습니다.');
+  }
+
+  const json = JSON.parse(match[1]);
+  if (json.status === 'error') {
+    throw new Error(
+      json.errors?.[0]?.detailed_message || json.errors?.[0]?.message || '시트 조회 오류'
+    );
+  }
+
+  const table = json.table;
+  if (!table) return [];
+
+  const rows: string[][] = [];
+
+  // Extract columns/headers
+  const headers = (table.cols || []).map((col: any) => col?.label || '');
+  if (headers.some((h: string) => h.trim().length > 0)) {
+    rows.push(headers);
+  }
+
+  // Extract row values
+  for (const rowObj of table.rows || []) {
+    const rowCells: string[] = [];
+    for (const cell of rowObj.c || []) {
+      if (!cell) {
+        rowCells.push('');
+      } else if (cell.f !== undefined && cell.f !== null) {
+        rowCells.push(String(cell.f));
+      } else if (cell.v !== undefined && cell.v !== null) {
+        rowCells.push(String(cell.v));
+      } else {
+        rowCells.push('');
+      }
+    }
+    rows.push(rowCells);
+  }
+
+  return rows;
 }
 
 /**
@@ -44,26 +114,32 @@ export async function getSpreadsheetDetails(
 export async function getSheetValues(
   spreadsheetId: string,
   sheetTitle: string,
-  accessToken: string,
+  accessToken?: string | null,
   range: string = 'A:Z'
 ): Promise<string[][]> {
-  const encodedRange = encodeURIComponent(`'${sheetTitle}'!${range}`);
-  const res = await fetch(
-    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodedRange}?valueRenderOption=FORMATTED_VALUE`,
-    {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    }
-  );
+  if (accessToken) {
+    try {
+      const encodedRange = encodeURIComponent(`'${sheetTitle}'!${range}`);
+      const res = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodedRange}?valueRenderOption=FORMATTED_VALUE`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => null);
-    throw new Error(err?.error?.message || `'${sheetTitle}' 시트 데이터를 불러오지 못했습니다.`);
+      if (res.ok) {
+        const data = await res.json();
+        return data.values || [];
+      }
+    } catch (e) {
+      console.warn('OAuth fetch failed, trying public gviz fallback:', e);
+    }
   }
 
-  const data = await res.json();
-  return data.values || [];
+  // Fallback to public gviz/tq endpoint (works without OAuth / without domain registration)
+  return await fetchPublicSheetViaGviz(spreadsheetId, sheetTitle);
 }
 
 /**

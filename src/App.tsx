@@ -143,8 +143,6 @@ export default function App() {
   });
 
   const isRealGoogleConnected = Boolean(
-    user &&
-    accessToken &&
     spreadsheetId &&
     !['sample-ledger-2026', 'user-2026-ledger', 'pasted-sheet'].includes(spreadsheetId)
   );
@@ -174,14 +172,29 @@ export default function App() {
       () => {
         setUser(null);
         setAccessToken(null);
+
+        // If not logged in, check if user saved a direct sheet ID before
+        try {
+          const savedId = localStorage.getItem('smart_money_spreadsheet_id');
+          const savedTitle = localStorage.getItem('smart_money_spreadsheet_title');
+          if (
+            savedId &&
+            savedTitle &&
+            !['sample-ledger-2026', 'user-2026-ledger'].includes(savedId)
+          ) {
+            handleSelectSpreadsheet(savedId, savedTitle);
+          }
+        } catch (e) {
+          console.warn('Could not restore spreadsheet from storage', e);
+        }
       }
     );
     return () => unsubscribe();
   }, []);
 
-  // 2. Fetch and Analyze Google Sheet Data
+  // 2. Fetch and Analyze Google Sheet Data (supports both OAuth and public gviz)
   const loadSheetData = useCallback(
-    async (sId: string, sheetName: string, token: string) => {
+    async (sId: string, sheetName: string, token?: string | null) => {
       setIsLoadingData(true);
       setErrorNotice(null);
       try {
@@ -313,10 +326,8 @@ export default function App() {
       console.warn('Could not save spreadsheet to storage', e);
     }
 
-    if (token) {
-      const curMonth = `${new Date().getMonth() + 1}월`;
-      await loadSheetData(id, curMonth, token);
-    }
+    const curMonth = `${new Date().getMonth() + 1}월`;
+    await loadSheetData(id, curMonth, token);
   };
 
   // Google Login Handler

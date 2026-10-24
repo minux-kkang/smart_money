@@ -31,7 +31,9 @@ export const SpreadsheetPickerModal: React.FC<SpreadsheetPickerModalProps> = ({
   onSelectSpreadsheet,
   onImportPastedData,
 }) => {
-  const [activeTab, setActiveTab] = useState<'drive' | 'url' | 'paste'>('drive');
+  const [activeTab, setActiveTab] = useState<'drive' | 'url' | 'paste'>(() =>
+    accessToken ? 'drive' : 'url'
+  );
   const [files, setFiles] = useState<SpreadsheetFile[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -145,11 +147,27 @@ export const SpreadsheetPickerModal: React.FC<SpreadsheetPickerModalProps> = ({
         </div>
 
         {/* Navigation Tabs */}
-        <div className="flex items-center border-b border-slate-100 px-6 bg-slate-50/30 text-xs font-bold">
+        {/* Tab Selection */}
+        <div className="flex items-center border-b border-slate-100 px-6 bg-slate-50/30 text-xs font-bold overflow-x-auto scrollbar-none">
+          <button
+            type="button"
+            onClick={() => setActiveTab('url')}
+            className={`py-3 px-3 border-b-2 transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
+              activeTab === 'url'
+                ? 'border-emerald-600 text-emerald-700'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Link2 className="w-4 h-4 text-emerald-600" />
+            <span>시트 링크 바로 연동</span>
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+              추천
+            </span>
+          </button>
           <button
             type="button"
             onClick={() => setActiveTab('drive')}
-            className={`py-3 px-3 border-b-2 transition cursor-pointer flex items-center gap-1.5 ${
+            className={`py-3 px-3 border-b-2 transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
               activeTab === 'drive'
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -160,20 +178,8 @@ export const SpreadsheetPickerModal: React.FC<SpreadsheetPickerModalProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab('url')}
-            className={`py-3 px-3 border-b-2 transition cursor-pointer flex items-center gap-1.5 ${
-              activeTab === 'url'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <Link2 className="w-4 h-4" />
-            <span>시트 링크 / ID 입력</span>
-          </button>
-          <button
-            type="button"
             onClick={() => setActiveTab('paste')}
-            className={`py-3 px-3 border-b-2 transition cursor-pointer flex items-center gap-1.5 ${
+            className={`py-3 px-3 border-b-2 transition cursor-pointer flex items-center gap-1.5 shrink-0 ${
               activeTab === 'paste'
                 ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
@@ -344,32 +350,35 @@ export const SpreadsheetPickerModal: React.FC<SpreadsheetPickerModalProps> = ({
           {/* TAB 2: Direct URL / ID */}
           {activeTab === 'url' && (
             <div className="space-y-4">
-              <p className="text-xs text-slate-600 leading-relaxed">
-                공유하려는 Google Spreadsheet의 브라우저 주소 표시줄 전체 URL 또는 스프레드시트 ID를 붙여넣으세요.
-              </p>
+              <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-950 space-y-1.5 leading-relaxed">
+                <p className="font-bold flex items-center gap-1.5 text-emerald-900">
+                  <span>⚡</span> 도메인 승인/로그인 없이 10초 만에 바로 연동하기
+                </p>
+                <ol className="list-decimal list-inside space-y-1 text-emerald-800 text-[11px] pl-1">
+                  <li>내 구글 스프레드시트 열기</li>
+                  <li>우측 상단 <strong>[공유]</strong> 클릭 ➔ 일반 액세스를 <strong>[링크가 있는 모든 사용자: 뷰어]</strong>로 변경</li>
+                  <li><strong>[링크 복사]</strong>를 누른 후 아래에 붙여넣고 <strong>[즉시 연동하기]</strong>를 클릭하세요.</li>
+                </ol>
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  스프레드시트 URL 또는 ID
+                  스프레드시트 공유 링크(URL) 또는 시트 ID
                 </label>
                 <input
                   type="text"
-                  placeholder="https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit"
+                  placeholder="https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5.../edit"
                   value={customId}
                   onChange={(e) => setCustomId(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:ring-2 focus:ring-blue-500"
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 focus:ring-2 focus:ring-emerald-500"
                 />
-              </div>
-
-              <div className="p-3 bg-blue-50 rounded-xl text-xs text-blue-800 space-y-1">
-                <p className="font-bold">💡 팁:</p>
-                <p>Google 계정으로 로그인되어 있으면 해당 시트를 즉시 불러와 열 구조를 분석합니다.</p>
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl"
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer"
                 >
                   취소
                 </button>
@@ -377,9 +386,9 @@ export const SpreadsheetPickerModal: React.FC<SpreadsheetPickerModalProps> = ({
                   type="button"
                   onClick={handleDirectSelect}
                   disabled={!customId.trim()}
-                  className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-xs disabled:opacity-40"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-xs disabled:opacity-40 cursor-pointer"
                 >
-                  연결 및 분석하기
+                  시트 즉시 연동하기
                 </button>
               </div>
             </div>
