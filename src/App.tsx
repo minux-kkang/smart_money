@@ -149,12 +149,27 @@ export default function App() {
     !['sample-ledger-2026', 'user-2026-ledger', 'pasted-sheet'].includes(spreadsheetId)
   );
 
-  // 1. Initialize Auth on Mount
+  // 1. Initialize Auth on Mount with session restoration
   useEffect(() => {
     const unsubscribe = initAuth(
       (currentUser, token) => {
         setUser(currentUser);
         setAccessToken(token);
+
+        // Auto-restore previously selected spreadsheet
+        try {
+          const savedId = localStorage.getItem('smart_money_spreadsheet_id');
+          const savedTitle = localStorage.getItem('smart_money_spreadsheet_title');
+          if (
+            savedId &&
+            savedTitle &&
+            !['sample-ledger-2026', 'user-2026-ledger'].includes(savedId)
+          ) {
+            handleSelectSpreadsheet(savedId, savedTitle, token);
+          }
+        } catch (e) {
+          console.warn('Could not restore spreadsheet from storage', e);
+        }
       },
       () => {
         setUser(null);
@@ -291,6 +306,13 @@ export default function App() {
     setSpreadsheetTitle(name);
     setSpreadsheetUrl(`https://docs.google.com/spreadsheets/d/${id}`);
 
+    try {
+      localStorage.setItem('smart_money_spreadsheet_id', id);
+      localStorage.setItem('smart_money_spreadsheet_title', name);
+    } catch (e) {
+      console.warn('Could not save spreadsheet to storage', e);
+    }
+
     if (token) {
       const curMonth = `${new Date().getMonth() + 1}월`;
       await loadSheetData(id, curMonth, token);
@@ -300,6 +322,7 @@ export default function App() {
   // Google Login Handler
   const handleLogin = async () => {
     setIsLoggingIn(true);
+    setErrorNotice(null);
     try {
       const res = await googleSignIn();
       if (res && res.accessToken) {
@@ -325,7 +348,7 @@ export default function App() {
         }
       }
     } catch (err: any) {
-      alert(`로그인 실패: ${err?.message || '인증 오류'}`);
+      setErrorNotice(err?.message || '구글 로그인 중 오류가 발생했습니다.');
     } finally {
       setIsLoggingIn(false);
     }
@@ -334,6 +357,12 @@ export default function App() {
   // Logout Handler
   const handleLogout = async () => {
     await logout();
+    try {
+      localStorage.removeItem('smart_money_spreadsheet_id');
+      localStorage.removeItem('smart_money_spreadsheet_title');
+    } catch (e) {
+      console.warn('Could not clear saved sheet', e);
+    }
     setUser(null);
     setAccessToken(null);
     setSpreadsheetId('sample-ledger-2026');
@@ -621,13 +650,23 @@ export default function App() {
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <h4 className="text-sm font-bold">샘플 가계부 모드 체험 중</h4>
-                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-yellow-400 text-slate-900">
-                    미연동 (샘플 데이터)
+                  <h4 className="text-sm font-bold">
+                    {user
+                      ? `${user.displayName || user.email?.split('@')[0]}님 구글 계정 인증됨`
+                      : '샘플 가계부 모드 체험 중'}
+                  </h4>
+                  <span
+                    className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                      user ? 'bg-emerald-400 text-slate-900' : 'bg-yellow-400 text-slate-900'
+                    }`}
+                  >
+                    {user ? '구글 로그인 완료' : '미연동 (샘플 데이터)'}
                   </span>
                 </div>
                 <p className="text-xs text-blue-100 mt-1 leading-relaxed">
-                  현재 화면의 상세 내역은 샘플 데이터입니다. Google 드라이브에 보관된 본인의 가계부 시트를 직접 연결하시려면 로그인 후 시트를 선택해 주세요.
+                  {user
+                    ? '구글 계정이 인증되었습니다! 이제 [내 가계부 시트 선택하기]를 눌러 구글 드라이브의 실제 가계부를 연결해 주세요.'
+                    : '현재 화면의 상세 내역은 샘플 데이터입니다. Google 드라이브에 보관된 본인의 가계부 시트를 직접 연결하시려면 로그인 후 시트를 선택해 주세요.'}
                 </p>
               </div>
             </div>
@@ -638,13 +677,22 @@ export default function App() {
               >
                 직접 등록 / 붙여넣기
               </button>
-              <button
-                onClick={handleLogin}
-                disabled={isLoggingIn}
-                className="px-4 py-2 bg-white text-blue-700 hover:bg-blue-50 rounded-xl text-xs font-black shadow-md transition active:scale-95 cursor-pointer shrink-0"
-              >
-                {isLoggingIn ? 'Google 연결 중...' : 'Google 계정으로 연동하기'}
-              </button>
+              {user ? (
+                <button
+                  onClick={() => setIsPickerOpen(true)}
+                  className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-black shadow-md transition active:scale-95 cursor-pointer shrink-0"
+                >
+                  내 가계부 시트 선택하기
+                </button>
+              ) : (
+                <button
+                  onClick={handleLogin}
+                  disabled={isLoggingIn}
+                  className="px-4 py-2 bg-white text-blue-700 hover:bg-blue-50 rounded-xl text-xs font-black shadow-md transition active:scale-95 cursor-pointer shrink-0"
+                >
+                  {isLoggingIn ? 'Google 연결 중...' : 'Google 계정으로 연동하기'}
+                </button>
+              )}
             </div>
           </div>
         ) : (
