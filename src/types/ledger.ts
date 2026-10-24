@@ -1,5 +1,13 @@
 export type TransactionType = 'expense' | 'income' | 'transfer';
 
+export interface SubItem {
+  id: string;
+  name: string;
+  amount: number;
+  category?: string;
+  memo?: string;
+}
+
 export interface Transaction {
   id: string;
   date: string; // YYYY-MM-DD
@@ -11,6 +19,7 @@ export interface Transaction {
   memo?: string;
   rowIndex?: number; // 1-based index in the Google Sheet
   sheetTitle?: string;
+  subItems?: SubItem[];
 }
 
 export interface ColumnMapping {

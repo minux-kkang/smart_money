@@ -14,6 +14,11 @@ import {
   ArrowLeftRight,
   Info,
   X,
+  Layers,
+  Package,
+  Trash2,
+  Equal,
+  Settings,
 } from 'lucide-react';
 import {
   Transaction,
@@ -25,8 +30,9 @@ import {
   DEFAULT_EXPENSE_CATEGORIES,
   DEFAULT_INCOME_CATEGORIES,
   DEFAULT_PAYMENT_METHODS,
+  SubItem,
 } from '../types/ledger';
-import { Settings } from 'lucide-react';
+import { serializeSubItemsToMemo, saveSubItemsForTransaction } from '../services/subItemStorage';
 
 interface ExpenseInputFormProps {
   analysis: SheetAnalysisResult;
@@ -69,7 +75,38 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [successAnimation, setSuccessAnimation] = useState<boolean>(false);
 
+  // Sub-items for composite purchases (Coupang, Mart, etc.)
+  const [showSubItemEntry, setShowSubItemEntry] = useState<boolean>(false);
+  const [subItems, setSubItems] = useState<SubItem[]>([]);
+
   const descInputRef = useRef<HTMLInputElement>(null);
+
+  const subItemsSum = React.useMemo(() => {
+    return subItems.reduce((acc, item) => acc + (Number(item.amount) || 0), 0);
+  }, [subItems]);
+
+  const handleAddSubItem = () => {
+    setSubItems((prev) => [
+      ...prev,
+      { id: `form-sub-${Date.now()}-${prev.length}`, name: '', amount: 0, category: category || '식비' },
+    ]);
+  };
+
+  const handleUpdateSubItem = (id: string, field: keyof SubItem, value: any) => {
+    setSubItems((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item))
+    );
+  };
+
+  const handleRemoveSubItem = (id: string) => {
+    setSubItems((prev) => prev.filter((item) => item.id !== id));
+  };
+
+  const handleSyncAmountWithSubItems = () => {
+    if (subItemsSum > 0) {
+      setAmountStr(subItemsSum.toLocaleString('ko-KR'));
+    }
+  };
 
   // Automatically calculate target month from the selected date!
   const targetMonth = React.useMemo(() => {
@@ -240,6 +277,19 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
 
     setIsSubmitting(true);
     try {
+      const validSubItems = subItems
+        .filter((s) => s.name.trim().length > 0 || s.amount > 0)
+        .map((s) => ({
+          ...s,
+          name: s.name.trim() || '품목',
+          amount: Math.max(0, Number(s.amount) || 0),
+        }));
+
+      const finalMemo =
+        validSubItems.length > 0
+          ? serializeSubItemsToMemo(memo.trim() || undefined, validSubItems)
+          : memo.trim() || undefined;
+
       await onAddTransaction({
         date,
         type,
@@ -247,8 +297,9 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
         description: description.trim(),
         amount: numAmount,
         paymentMethod: paymentMethod || undefined,
-        memo: memo.trim() || undefined,
+        memo: finalMemo,
         sheetTitle: targetMonth,
+        subItems: validSubItems.length > 0 ? validSubItems : undefined,
       });
 
       // Show success feedback
@@ -259,6 +310,8 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
       setAmountStr('');
       setDescription('');
       setMemo('');
+      setSubItems([]);
+      setShowSubItemEntry(false);
 
       if (isModal && onClose) {
         onClose();
@@ -660,6 +713,114 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
               </button>
             ))}
           </div>
+        </div>
+
+        {/* 6.5 Sub-item Breakdown Mode (쿠팡, 마트 등 복합 결제) */}
+        <div className="border border-blue-200 bg-blue-50/40 rounded-xl p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <button
+              type="button"
+              onClick={() => {
+                if (!showSubItemEntry && subItems.length === 0) {
+                  handleAddSubItem();
+                }
+                setShowSubItemEntry(!showSubItemEntry);
+              }}
+              className="flex items-center gap-2 text-xs font-black text-blue-800 hover:text-blue-900 cursor-pointer"
+            >
+              <div className="w-5 h-5 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold">
+                <Layers className="w-3.5 h-3.5" />
+              </div>
+              <span>쿠팡·마트 품목별 세부내역 함께 입력 ({subItems.length}개)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!showSubItemEntry && subItems.length === 0) {
+                  handleAddSubItem();
+                }
+                setShowSubItemEntry(!showSubItemEntry);
+              }}
+              className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
+            >
+              {showSubItemEntry ? '접기 ▲' : '세부내역 펼치기 ▼'}
+            </button>
+          </div>
+
+          {showSubItemEntry && (
+            <div className="space-y-2 pt-1 border-t border-blue-100 animate-in fade-in duration-150">
+              <p className="text-[11px] text-slate-500 font-medium">
+                쿠팡이나 마트 장보기 영수증처럼 한 번에 여러 물품을 결제했을 때 각 품목과 금액을 나누어 기록할 수 있습니다.
+              </p>
+
+              <div className="space-y-1.5">
+                {subItems.map((item, idx) => (
+                  <div key={item.id} className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-mono font-bold text-slate-400 w-4 text-center">
+                      {idx + 1}
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="품목명 (예: 우유, 세제)"
+                      value={item.name}
+                      onChange={(e) => handleUpdateSubItem(item.id, 'name', e.target.value)}
+                      className="flex-1 px-2.5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none focus:border-blue-500"
+                    />
+                    <div className="w-24 sm:w-28 relative">
+                      <input
+                        type="number"
+                        min="0"
+                        step="10"
+                        placeholder="금액"
+                        value={item.amount || ''}
+                        onChange={(e) =>
+                          handleUpdateSubItem(item.id, 'amount', e.target.value ? Number(e.target.value) : 0)
+                        }
+                        className="w-full pl-2 pr-5 py-1 bg-white border border-slate-300 rounded-lg text-xs font-black text-slate-900 text-right focus:outline-none focus:border-blue-500"
+                      />
+                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">
+                        원
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveSubItem(item.id)}
+                      className="p-1 text-slate-400 hover:text-rose-600 rounded-md cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleAddSubItem}
+                  className="px-2.5 py-1 bg-white border border-blue-300 text-blue-700 hover:bg-blue-50 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>품목 추가</span>
+                </button>
+
+                {subItemsSum > 0 && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-slate-600 font-bold">
+                      품목 합계: <strong className="text-blue-700 font-black">{subItemsSum.toLocaleString('ko-KR')}원</strong>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleSyncAmountWithSubItems}
+                      className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-[11px] font-black cursor-pointer shadow-xs"
+                      title="입력창 상단 금액을 세부 품목 합계로 자동 설정"
+                    >
+                      총 금액에 적용
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* 7. Memo */}

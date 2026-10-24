@@ -52,6 +52,10 @@ import {
   getDefaultPaymentMethods,
 } from './services/categoryManager';
 import {
+  enrichTransactionsWithSubItems,
+  saveSubItemsForTransaction,
+} from './services/subItemStorage';
+import {
   FileSpreadsheet,
   BarChart3,
   SearchCode,
@@ -132,7 +136,7 @@ export default function App() {
     ],
   }));
   const [transactions, setTransactions] = useState<Transaction[]>(() =>
-    generateUserAllTransactions()
+    enrichTransactionsWithSubItems(generateUserAllTransactions())
   );
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
@@ -295,7 +299,7 @@ export default function App() {
           }
           setActiveTab('matrix');
         } else {
-          setTransactions(result.transactions);
+          setTransactions(enrichTransactionsWithSubItems(result.transactions));
           setActiveTab('monthly');
         }
       } catch (err: any) {
@@ -467,6 +471,9 @@ export default function App() {
         id,
         sheetTitle: targetMonth,
       };
+      if (createdTx.subItems && createdTx.subItems.length > 0) {
+        saveSubItemsForTransaction(createdTx, createdTx.subItems);
+      }
       setTransactions((prev) => [createdTx, ...prev]);
       setActiveSheetTitle(targetMonth);
       return;
@@ -517,6 +524,7 @@ export default function App() {
 
     // Snappy optimistic local state update
     setTransactions((prev) => prev.map((t) => (t.id === tx.id ? tx : t)));
+    saveSubItemsForTransaction(tx, tx.subItems || []);
 
     if (!isRealGoogleConnected || !accessToken || !tx.rowIndex) {
       return;

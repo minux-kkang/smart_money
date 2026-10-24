@@ -175,6 +175,34 @@ export function generateUserMonthlyTransactions(monthIndex: number): any[] {
         payment = p % 2 === 0 ? '티머니' : '카카오페이';
       }
 
+      let subItems: any[] | undefined = undefined;
+      if (desc.includes('쿠팡 로켓프레시') && pieceAmt >= 20000) {
+        const item1 = 8900;
+        const item2 = 6450;
+        const remainingItem = Math.max(pieceAmt - (item1 + item2), 1000);
+        subItems = [
+          { id: `sub-${monthNum}-${p}-1`, name: '무항생제 신선란 30구', amount: item1, category: '식비' },
+          { id: `sub-${monthNum}-${p}-2`, name: '서울우유 2.3L', amount: item2, category: '식비' },
+          { id: `sub-${monthNum}-${p}-3`, name: '제주 삼다수 2L 6병', amount: remainingItem, category: '식비' },
+        ];
+      } else if (desc.includes('쿠팡 롤화장지/세탁세제') && pieceAmt >= 25000) {
+        const item1 = Math.round(pieceAmt * 0.55);
+        const item2 = pieceAmt - item1;
+        subItems = [
+          { id: `sub-${monthNum}-${p}-1`, name: '크리넥스 3겹 화장지 30롤', amount: item1, category: '생활용품' },
+          { id: `sub-${monthNum}-${p}-2`, name: '퍼실 딥클린 세탁세제 2.7L', amount: item2, category: '생활용품' },
+        ];
+      } else if (desc.includes('이마트') && pieceAmt >= 30000) {
+        const item1 = Math.round(pieceAmt * 0.5);
+        const item2 = Math.round(pieceAmt * 0.3);
+        const item3 = pieceAmt - item1 - item2;
+        subItems = [
+          { id: `sub-${monthNum}-${p}-1`, name: '한우 등심 300g', amount: item1, category: '식비' },
+          { id: `sub-${monthNum}-${p}-2`, name: '신선 채소 및 양파', amount: item2, category: '식비' },
+          { id: `sub-${monthNum}-${p}-3`, name: '신라면 5개입 멀티팩', amount: item3, category: '간식' },
+        ];
+      }
+
       result.push({
         id: `user-2026-${monthNum}-${cat.category}-${p}`,
         date: `${mPrefix}-${dayStr}`,
@@ -183,9 +211,12 @@ export function generateUserMonthlyTransactions(monthIndex: number): any[] {
         description: desc,
         amount: pieceAmt,
         paymentMethod: payment,
-        memo: `${monthStr} ${cat.category} 세부 지출`,
+        memo: subItems
+          ? `[세부품목: ${subItems.map((s) => `${s.name} ${s.amount.toLocaleString()}원`).join(' | ')}]`
+          : `${monthStr} ${cat.category} 세부 지출`,
         rowIndex: rowId++,
         sheetTitle: monthStr,
+        subItems,
       });
     }
   });
