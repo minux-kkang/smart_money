@@ -40,12 +40,9 @@ export const getSavedToken = (): string | null => {
   if (cachedAccessToken) return cachedAccessToken;
   try {
     const token = localStorage.getItem(STORAGE_TOKEN_KEY);
-    const expiry = localStorage.getItem(STORAGE_EXPIRY_KEY);
     if (token) {
-      if (!expiry || Number(expiry) > Date.now()) {
-        cachedAccessToken = token;
-        return token;
-      }
+      cachedAccessToken = token;
+      return token;
     }
   } catch (e) {
     console.warn('Could not read auth from localStorage:', e);
@@ -68,17 +65,24 @@ export const initAuth = (
   onAuthFailure?: () => void
 ) => {
   return onAuthStateChanged(auth, async (user: User | null) => {
-    const validToken = getSavedToken();
-    if (user && validToken) {
-      if (onAuthSuccess) onAuthSuccess(user, validToken);
-    } else if (user && !validToken) {
-      // User is logged in to Firebase but OAuth token needs renewal
-      if (onAuthFailure) onAuthFailure();
+    if (user) {
+      const savedToken = getSavedToken() || '';
+      if (onAuthSuccess) onAuthSuccess(user, savedToken);
     } else {
-      clearAuthSession();
+      // User is genuinely logged out
       if (onAuthFailure) onAuthFailure();
     }
   });
+};
+
+export const refreshGoogleToken = async (): Promise<string | null> => {
+  try {
+    const res = await googleSignIn();
+    return res?.accessToken || null;
+  } catch (err) {
+    console.warn('Silent token refresh failed:', err);
+    return null;
+  }
 };
 
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {

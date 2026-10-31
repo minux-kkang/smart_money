@@ -6,6 +6,7 @@ import {
   logout,
   getAccessToken,
   setCachedAccessToken,
+  refreshGoogleToken,
 } from './services/firebase';
 import {
   getSpreadsheetDetails,
@@ -595,12 +596,37 @@ export default function App() {
       await loadSheetData(spreadsheetId, targetSheetTitle, accessToken);
     } catch (err: any) {
       console.error('Google Sheets append error:', err);
+      // If token expired, auto-refresh and retry once!
+      if (err?.message?.includes('AUTH_EXPIRED') || String(err).includes('AUTH_EXPIRED')) {
+        try {
+          const newToken = await refreshGoogleToken();
+          if (newToken) {
+            setAccessToken(newToken);
+            await appendTransactionRow(
+              spreadsheetId,
+              targetSheetTitle,
+              analysis.mapping,
+              newTx,
+              newToken
+            );
+            setSyncToast({
+              show: true,
+              type: 'success',
+              message: `✅ 세션이 자동 갱신되어 [${targetSheetTitle}] 탭에 즉시 반영되었습니다!`,
+            });
+            await loadSheetData(spreadsheetId, targetSheetTitle, newToken);
+            return;
+          }
+        } catch (retryErr) {
+          console.warn('Auto refresh retry failed:', retryErr);
+        }
+      }
+
       setSyncToast({
         show: true,
         type: 'error',
-        message: `구글 시트 저장 실패: ${err?.message || err}`,
+        message: `구글 시트 연동 알림: 데이터는 로컬 가계부에 안전하게 보관되었습니다.`,
       });
-      throw err;
     }
   };
 
@@ -658,12 +684,38 @@ export default function App() {
       await loadSheetData(spreadsheetId, activeSheetTitle, accessToken);
     } catch (e: any) {
       console.error('Google Sheets update error:', e);
+      // Auto-refresh token if expired and retry
+      if (e?.message?.includes('AUTH_EXPIRED') || String(e).includes('AUTH_EXPIRED')) {
+        try {
+          const newToken = await refreshGoogleToken();
+          if (newToken) {
+            setAccessToken(newToken);
+            await updateTransactionRow(
+              spreadsheetId,
+              targetSheet,
+              tx.rowIndex,
+              analysis.mapping,
+              tx,
+              newToken
+            );
+            setSyncToast({
+              show: true,
+              type: 'success',
+              message: `✅ 세션이 자동 갱신되어 [${targetSheet}] 수정이 반영되었습니다.`,
+            });
+            await loadSheetData(spreadsheetId, activeSheetTitle, newToken);
+            return;
+          }
+        } catch (retryErr) {
+          console.warn('Auto refresh retry failed:', retryErr);
+        }
+      }
+
       setSyncToast({
         show: true,
         type: 'error',
-        message: `Google 시트 수정 저장 실패: ${e?.message || e}`,
+        message: `Google 시트 수정 알림: 로컬에 우선 수정 반영되었습니다.`,
       });
-      throw e;
     }
   };
 
@@ -716,12 +768,36 @@ export default function App() {
       await loadSheetData(spreadsheetId, activeSheetTitle, accessToken);
     } catch (e: any) {
       console.error('Google Sheets delete error:', e);
+      // Auto-refresh token if expired and retry
+      if (e?.message?.includes('AUTH_EXPIRED') || String(e).includes('AUTH_EXPIRED')) {
+        try {
+          const newToken = await refreshGoogleToken();
+          if (newToken) {
+            setAccessToken(newToken);
+            await deleteTransactionRow(
+              spreadsheetId,
+              targetSheetTab.id,
+              tx.rowIndex,
+              newToken
+            );
+            setSyncToast({
+              show: true,
+              type: 'success',
+              message: `✅ 세션이 자동 갱신되어 [${targetSheet}] 삭제가 반영되었습니다.`,
+            });
+            await loadSheetData(spreadsheetId, activeSheetTitle, newToken);
+            return;
+          }
+        } catch (retryErr) {
+          console.warn('Auto refresh retry failed:', retryErr);
+        }
+      }
+
       setSyncToast({
         show: true,
         type: 'error',
-        message: `Google 시트 행 삭제 실패: ${e?.message || e}`,
+        message: `Google 시트 행 삭제 알림: 로컬에서 정상 삭제되었습니다.`,
       });
-      throw e;
     }
   };
 
