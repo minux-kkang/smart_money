@@ -764,7 +764,10 @@ export default function App() {
         }
         return next;
       });
-      setTransactions((prev) => [createdTx, ...prev]);
+      setTransactions((prev) => {
+        const list = [createdTx, ...prev];
+        return list.sort((a, b) => b.date.localeCompare(a.date));
+      });
       setActiveSheetTitle(targetSheetTitle);
       return;
     }
@@ -1224,10 +1227,16 @@ export default function App() {
       });
 
       if (targetSheetTitle === activeSheetTitle) {
-        setTransactions((prev) => [...createdList, ...prev]);
+        setTransactions((prev) => {
+          const list = [...createdList, ...prev];
+          return list.sort((a, b) => b.date.localeCompare(a.date));
+        });
       } else {
         setActiveSheetTitle(targetSheetTitle);
-        setTransactions((prev) => [...createdList, ...prev]);
+        setTransactions((prev) => {
+          const list = [...createdList, ...prev];
+          return list.sort((a, b) => b.date.localeCompare(a.date));
+        });
       }
 
       setSyncToast({

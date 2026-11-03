@@ -203,7 +203,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (match) return String(parseInt(match[1], 10));
     return String(new Date().getMonth() + 1);
   });
-  const [sortField, setSortField] = useState<'recent' | 'date' | 'amount'>('recent');
+  const [sortField, setSortField] = useState<'recent' | 'date' | 'amount'>('date');
   const [sortAsc, setSortAsc] = useState<boolean>(false);
 
   // Collapsible category ranking box state
@@ -1901,15 +1901,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   }
                 }}
                 className={`px-2.5 py-1.5 border-2 rounded-xl text-xs font-bold cursor-pointer whitespace-nowrap shrink-0 transition ${
-                  sortField === 'recent' && !sortAsc
+                  sortField === 'date'
                     ? 'bg-blue-50 border-blue-400 text-blue-800'
                     : 'bg-white border-slate-200 text-slate-700'
                 }`}
-                title="정렬 기준 선택"
+                title="정렬 기준 선택 (날짜순 기본 정렬)"
               >
-                <option value="recent_desc">최근 입력순 (최신)</option>
-                <option value="date_desc">날짜 최신순</option>
+                <option value="date_desc">날짜 최신순 (기본)</option>
                 <option value="date_asc">날짜 오래된순</option>
+                <option value="recent_desc">최근 입력순</option>
                 <option value="amount_desc">금액 높은순</option>
                 <option value="amount_asc">금액 낮은순</option>
               </select>

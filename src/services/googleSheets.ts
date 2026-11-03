@@ -1244,6 +1244,9 @@ export async function appendTransactionRow(
     throw new Error(err?.error?.message || `구글 시트 '${sheetTitle}'의 ${targetRowNumber}행에 항목 추가 실패`);
   }
 
+  // Automatically sort rows in Google Sheets by date
+  await sortSheetRowsByDate(spreadsheetId, sheetTitle, mapping.dateCol, accessToken, 'ASCENDING');
+
   return { rowIndex: targetRowNumber, sheetTitle };
 }
 
@@ -1515,7 +1518,85 @@ export async function appendBatchTransactions(
     throw new Error(err?.error?.message || `구글 시트 '${sheetTitle}'에 ${batchRowValues.length}건 일괄 추가 실패`);
   }
 
+  // Automatically sort rows in Google Sheets by date
+  await sortSheetRowsByDate(spreadsheetId, sheetTitle, mapping.dateCol, accessToken, 'ASCENDING');
+
   return { count: batchRowValues.length, sheetTitle };
+}
+
+/**
+ * Sort data rows in a Google Sheet tab chronologically by Date column (keeping headers intact)
+ */
+export async function sortSheetRowsByDate(
+  spreadsheetId: string,
+  sheetTitle: string,
+  dateColIndex: number,
+  accessToken?: string | null,
+  sortOrder: 'ASCENDING' | 'DESCENDING' = 'ASCENDING'
+): Promise<void> {
+  if (!accessToken) return;
+
+  try {
+    const details = await getSpreadsheetDetails(spreadsheetId, accessToken);
+    const targetSheet = details.sheets.find((s) => s.title === sheetTitle);
+    if (!targetSheet) return;
+
+    // Fetch column A to determine filled row count and identify header row
+    const encodedRange = encodeURIComponent(`'${sheetTitle}'!A:A`);
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodedRange}?valueRenderOption=FORMATTED_VALUE`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!res.ok) return;
+    const data = await res.json();
+    const rows = data.values || [];
+    if (rows.length <= 2) return; // 0 or 1 data row, nothing to sort
+
+    let headerRowIndex = 0;
+    for (let r = 0; r < Math.min(rows.length, 5); r++) {
+      const val = String(rows[r]?.[0] || '').trim();
+      if (/(날짜|일자|일시|date)/i.test(val)) {
+        headerRowIndex = r;
+        break;
+      }
+    }
+
+    // Sort all rows beneath the header row
+    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        requests: [
+          {
+            sortRange: {
+              range: {
+                sheetId: targetSheet.id,
+                startRowIndex: headerRowIndex + 1, // Skip header row!
+                endRowIndex: rows.length,
+                startColumnIndex: 0,
+                endColumnIndex: 26, // Columns A to Z
+              },
+              sortSpecs: [
+                {
+                  dimensionIndex: dateColIndex >= 0 ? dateColIndex : 0,
+                  sortOrder,
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    });
+  } catch (err) {
+    console.warn('Auto sort sheet by date notice:', err);
+  }
 }
 
 /**
