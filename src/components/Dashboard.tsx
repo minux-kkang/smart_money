@@ -58,8 +58,9 @@ import { SubItemModal } from './SubItemModal';
 import { CopyPasteModal } from './CopyPasteModal';
 import { saveSubItemsForTransaction, serializeSubItemsToMemo } from '../services/subItemStorage';
 import {
-  getCategoryFrequencyUpToLastMonth,
+  getSmartUsageFrequencyMap,
   sortCategoriesByPastFrequency,
+  UsageFrequencyStats,
 } from '../services/categoryManager';
 import { evaluateMathFormula, containsFormula, sanitizeFormulaInput } from '../utils/mathFormula';
 
@@ -341,10 +342,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return 'positive'; // Default to positive (카테고리/구분이 있으므로 음수 없이 양수 통일)
   });
 
-  // Category frequency map up to last month for the Edit modal
-  const editCategoryFrequencyMap = useMemo(() => {
-    return getCategoryFrequencyUpToLastMonth(transactions, editForm.date || activeSheetTitle);
+  // Category frequency stats map for the Edit modal (smart recency)
+  const editCategoryStatsMap = useMemo(() => {
+    return getSmartUsageFrequencyMap(transactions, editForm.date || activeSheetTitle, 'category');
   }, [transactions, editForm.date, activeSheetTitle]);
+
+  const editCategoryFrequencyMap = useMemo(() => {
+    const map = new Map<string, number>();
+    editCategoryStatsMap.forEach((stat, key) => map.set(key, stat.score));
+    return map;
+  }, [editCategoryStatsMap]);
 
   // Categories for Edit Modal, strictly filtered by editForm.type and sorted by past frequency
   const editModalCategories = useMemo(() => {
@@ -763,17 +770,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return Array.from(set).filter(Boolean);
   }, [transactions, availableCategories]);
 
-  // Available Payment Methods with frequency tracking
+  // Available Payment Methods with smart frequency tracking (start of month: last month, then current month)
+  const paymentStatsMap = useMemo(() => {
+    return getSmartUsageFrequencyMap(transactions, editForm.date || activeSheetTitle, 'paymentMethod');
+  }, [transactions, editForm.date, activeSheetTitle]);
+
   const paymentFrequencyMap = useMemo(() => {
     const map = new Map<string, number>();
-    transactions.forEach((t) => {
-      if (t.paymentMethod && t.paymentMethod.trim()) {
-        const pm = t.paymentMethod.trim();
-        map.set(pm, (map.get(pm) || 0) + 1);
-      }
-    });
+    paymentStatsMap.forEach((stat, key) => map.set(key, stat.score));
     return map;
-  }, [transactions]);
+  }, [paymentStatsMap]);
 
   const allPaymentMethods = useMemo(() => {
     const set = new Set<string>();
@@ -3306,7 +3312,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 ) : (
                   <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
                     {editModalCategories.map((cat) => {
-                      const freq = editCategoryFrequencyMap.get(cat) || 0;
+                      const stat = editCategoryStatsMap.get(cat);
+                      const displayCount = stat?.displayCount || 0;
+                      const label = stat?.displayLabel || '신규/미사용 분류';
                       return (
                         <button
                           key={cat}
@@ -3321,16 +3329,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 : 'bg-sky-600 text-white shadow-sm'
                               : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-200'
                           }`}
-                          title={freq > 0 ? `지난달까지 ${freq}회 사용됨` : '신규/미사용 분류'}
+                          title={label}
                         >
                           <span>{cat}</span>
-                          {freq > 0 && (
+                          {displayCount > 0 && (
                             <span
                               className={`text-[9px] font-bold px-1 rounded-sm ${
                                 editForm.category === cat ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-500'
                               }`}
                             >
-                              {freq}
+                              {displayCount}
                             </span>
                           )}
                         </button>
@@ -3417,20 +3425,35 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 )}
 
                 <div className="flex flex-wrap gap-1.5">
-                  {(showAllPaymentMethods ? allPaymentMethods : allPaymentMethods.slice(0, 8)).map((pm) => (
-                    <button
-                      key={pm}
-                      type="button"
-                      onClick={() => setEditForm({ ...editForm, paymentMethod: pm })}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer whitespace-nowrap ${
-                        editForm.paymentMethod === pm
-                          ? 'bg-indigo-600 text-white shadow-sm'
-                          : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      {pm}
-                    </button>
-                  ))}
+                  {(showAllPaymentMethods ? allPaymentMethods : allPaymentMethods.slice(0, 8)).map((pm) => {
+                    const stat = paymentStatsMap.get(pm);
+                    const displayCount = stat?.displayCount || 0;
+                    const label = stat?.displayLabel || undefined;
+                    return (
+                      <button
+                        key={pm}
+                        type="button"
+                        onClick={() => setEditForm({ ...editForm, paymentMethod: pm })}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer whitespace-nowrap flex items-center gap-1 ${
+                          editForm.paymentMethod === pm
+                            ? 'bg-indigo-600 text-white shadow-sm'
+                            : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                        }`}
+                        title={label}
+                      >
+                        <span>{pm}</span>
+                        {displayCount > 0 && (
+                          <span
+                            className={`text-[9px] font-bold px-1 rounded-sm ${
+                              editForm.paymentMethod === pm ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-500'
+                            }`}
+                          >
+                            {displayCount}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 

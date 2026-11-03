@@ -39,8 +39,9 @@ import {
 } from '../types/ledger';
 import { serializeSubItemsToMemo, saveSubItemsForTransaction } from '../services/subItemStorage';
 import {
-  getCategoryFrequencyUpToLastMonth,
+  getSmartUsageFrequencyMap,
   sortCategoriesByPastFrequency,
+  UsageFrequencyStats,
 } from '../services/categoryManager';
 import { evaluateMathFormula, containsFormula, sanitizeFormulaInput } from '../utils/mathFormula';
 
@@ -178,10 +179,16 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     return activeSheetTitle || '10월';
   }, [date, activeSheetTitle]);
 
-  // Category frequency map up to last month
-  const categoryFrequencyMap = React.useMemo(() => {
-    return getCategoryFrequencyUpToLastMonth(transactions || [], date || activeSheetTitle);
+  // Category frequency stats map (smart recency: last month prioritized at start of month, current month dynamically boosted)
+  const categoryStatsMap = React.useMemo(() => {
+    return getSmartUsageFrequencyMap(transactions || [], date || activeSheetTitle, 'category');
   }, [transactions, date, activeSheetTitle]);
+
+  const categoryFrequencyMap = React.useMemo(() => {
+    const map = new Map<string, number>();
+    categoryStatsMap.forEach((stat, key) => map.set(key, stat.score));
+    return map;
+  }, [categoryStatsMap]);
 
   // Categories resolved from custom settings or sheet, strictly filtered by type and sorted by frequency
   const { visibleCategories, hiddenCategories } = React.useMemo(() => {
@@ -293,19 +300,16 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   };
 
 
-  // Track frequency of payment methods from past transactions to put the most used cards/methods first
+  // Track frequency of payment methods (smart recency: last month prioritized at start of month, current month dynamically boosted)
+  const paymentStatsMap = React.useMemo(() => {
+    return getSmartUsageFrequencyMap(transactions || [], date || activeSheetTitle, 'paymentMethod');
+  }, [transactions, date, activeSheetTitle]);
+
   const paymentFrequencyMap = React.useMemo(() => {
     const map = new Map<string, number>();
-    if (transactions) {
-      transactions.forEach((t) => {
-        if (t.paymentMethod && t.paymentMethod.trim()) {
-          const pm = t.paymentMethod.trim();
-          map.set(pm, (map.get(pm) || 0) + 1);
-        }
-      });
-    }
+    paymentStatsMap.forEach((stat, key) => map.set(key, stat.score));
     return map;
-  }, [transactions]);
+  }, [paymentStatsMap]);
 
   // Comprehensive resolved payment methods from all sources so none ever disappear
   const { allAvailablePaymentMethods, displayPaymentMethods, hiddenPaymentMethods, totalVisibleCount, hasMore } =
@@ -1266,7 +1270,9 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
               {/* Visible Categories */}
               <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
                 {visibleCategories.map((cat) => {
-                  const freq = categoryFrequencyMap.get(cat) || 0;
+                  const stat = categoryStatsMap.get(cat);
+                  const displayCount = stat?.displayCount || 0;
+                  const label = stat?.displayLabel || '신규/미사용 분류';
                   return (
                     <button
                       key={cat}
@@ -1284,16 +1290,16 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                             : 'bg-sky-600 text-white shadow-sm'
                           : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-200'
                       }`}
-                      title={freq > 0 ? `지난달까지 ${freq}회 사용됨` : '신규/미사용 분류'}
+                      title={label}
                     >
                       <span>{cat}</span>
-                      {freq > 0 && (
+                      {displayCount > 0 && (
                         <span
                           className={`text-[9px] font-bold px-1 rounded-sm ${
                             category === cat ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-500'
                           }`}
                         >
-                          {freq}
+                          {displayCount}
                         </span>
                       )}
                     </button>
@@ -1419,7 +1425,9 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
             <div className="space-y-1.5">
               <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
                 {displayPaymentMethods.map((pm) => {
-                  const freq = paymentFrequencyMap.get(pm) || 0;
+                  const stat = paymentStatsMap.get(pm);
+                  const displayCount = stat?.displayCount || 0;
+                  const label = stat?.displayLabel || undefined;
                   return (
                     <button
                       key={pm}
@@ -1430,16 +1438,16 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                           ? 'bg-indigo-600 text-white shadow-sm'
                           : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
                       }`}
-                      title={freq > 0 ? `최근 ${freq}회 사용됨` : undefined}
+                      title={label}
                     >
                       <span>{pm}</span>
-                      {freq > 0 && (
+                      {displayCount > 0 && (
                         <span
                           className={`text-[9px] font-bold px-1 rounded-sm ${
                             paymentMethod === pm ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-500'
                           }`}
                         >
-                          {freq}
+                          {displayCount}
                         </span>
                       )}
                     </button>

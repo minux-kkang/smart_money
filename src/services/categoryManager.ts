@@ -374,39 +374,60 @@ export function savePaymentMethods(methods: PaymentMethodItem[]): void {
 }
 
 
-/**
- * Calculate frequency of each category used in transactions up to last month.
- * If targetDateOrMonth is given (e.g. "2026-10-27" or "10월"), we count transactions strictly prior to that month.
- * If there are no past month transactions, fall back to overall transaction frequency.
- */
-export function getCategoryFrequencyUpToLastMonth(
-  transactions: Transaction[],
-  targetDateOrMonth?: string
-): Map<string, number> {
-  const frequencyMap = new Map<string, number>();
-  if (!transactions || transactions.length === 0) return frequencyMap;
+export interface UsageFrequencyStats {
+  score: number;
+  currentMonthCount: number;
+  lastMonthCount: number;
+  priorCount: number;
+  totalCount: number;
+  displayCount: number;
+  displayLabel: string;
+}
 
-  // Determine the cutoff month and year
+/**
+ * Calculates smart frequency statistics for categories or payment methods.
+ * Rules:
+ * 1. "월 시작땐 지난달 많이쓴 순서" (At the start of the month, prioritized by previous month's usage)
+ * 2. "점점점 해당월에 많이쓴 순서로" (As the month progresses, items used in the current month rapidly gain priority)
+ */
+export function getSmartUsageFrequencyMap(
+  transactions: Transaction[],
+  targetDateOrMonth?: string,
+  field: 'category' | 'paymentMethod' = 'category'
+): Map<string, UsageFrequencyStats> {
+  const statsMap = new Map<string, UsageFrequencyStats>();
+  if (!transactions || transactions.length === 0) return statsMap;
+
+  // Determine target year and month
   const now = new Date();
-  let cutoffYear = now.getFullYear();
-  let cutoffMonth = now.getMonth() + 1; // 1-12
+  let targetYear = now.getFullYear();
+  let targetMonth = now.getMonth() + 1; // 1-12
 
   if (targetDateOrMonth) {
     const ymd = targetDateOrMonth.match(/^(\d{4})[-.\/](\d{1,2})/);
     if (ymd) {
-      cutoffYear = parseInt(ymd[1], 10);
-      cutoffMonth = parseInt(ymd[2], 10);
+      targetYear = parseInt(ymd[1], 10);
+      targetMonth = parseInt(ymd[2], 10);
     } else {
       const mMatch = targetDateOrMonth.match(/(\d{1,2})월?/);
       if (mMatch) {
-        cutoffMonth = parseInt(mMatch[1], 10);
+        targetMonth = parseInt(mMatch[1], 10);
       }
     }
   }
 
-  let pastCount = 0;
+  // Determine previous month
+  let prevYear = targetYear;
+  let prevMonth = targetMonth - 1;
+  if (prevMonth < 1) {
+    prevMonth = 12;
+    prevYear -= 1;
+  }
+
   transactions.forEach((tx) => {
-    if (!tx.category) return;
+    const rawVal = field === 'category' ? tx.category : tx.paymentMethod;
+    if (!rawVal || !rawVal.trim()) return;
+    const key = rawVal.trim();
 
     let txMonth: number | null = null;
     let txYear: number | null = null;
@@ -418,41 +439,119 @@ export function getCategoryFrequencyUpToLastMonth(
         txMonth = parseInt(ym[2], 10);
       } else {
         const m = tx.date.match(/(\d{1,2})월/);
-        if (m) txMonth = parseInt(m[1], 10);
+        if (m) {
+          txMonth = parseInt(m[1], 10);
+          txYear = targetYear;
+        }
       }
     }
     if (txMonth === null && tx.sheetTitle) {
       const sm = tx.sheetTitle.match(/(\d{1,2})월/);
-      if (sm) txMonth = parseInt(sm[1], 10);
+      if (sm) {
+        txMonth = parseInt(sm[1], 10);
+        txYear = targetYear;
+      }
     }
 
-    let isPrior = false;
-    if (txYear && txMonth) {
-      if (txYear < cutoffYear || (txYear === cutoffYear && txMonth < cutoffMonth)) {
-        isPrior = true;
+    if (!statsMap.has(key)) {
+      statsMap.set(key, {
+        score: 0,
+        currentMonthCount: 0,
+        lastMonthCount: 0,
+        priorCount: 0,
+        totalCount: 0,
+        displayCount: 0,
+        displayLabel: '',
+      });
+    }
+
+    const stat = statsMap.get(key)!;
+    stat.totalCount += 1;
+
+    if (txYear !== null && txMonth !== null) {
+      if (txYear === targetYear && txMonth === targetMonth) {
+        stat.currentMonthCount += 1;
+      } else if (txYear === prevYear && txMonth === prevMonth) {
+        stat.lastMonthCount += 1;
+      } else if (txYear < targetYear || (txYear === targetYear && txMonth < targetMonth)) {
+        stat.priorCount += 1;
       }
     } else if (txMonth !== null) {
-      if (txMonth < cutoffMonth) {
-        isPrior = true;
+      if (txMonth === targetMonth) {
+        stat.currentMonthCount += 1;
+      } else if (txMonth === prevMonth) {
+        stat.lastMonthCount += 1;
+      } else if (txMonth < targetMonth) {
+        stat.priorCount += 1;
       }
-    }
-
-    if (isPrior) {
-      pastCount++;
-      frequencyMap.set(tx.category, (frequencyMap.get(tx.category) || 0) + 1);
+    } else {
+      stat.priorCount += 1;
     }
   });
 
-  // Fallback if no prior month transactions exist
-  if (pastCount === 0) {
-    transactions.forEach((tx) => {
-      if (tx.category) {
-        frequencyMap.set(tx.category, (frequencyMap.get(tx.category) || 0) + 1);
-      }
-    });
-  }
+  // Calculate scores and labels
+  let hasRecentActivity = false;
+  statsMap.forEach((stat) => {
+    if (stat.currentMonthCount > 0 || stat.lastMonthCount > 0) {
+      hasRecentActivity = true;
+    }
+  });
 
-  return frequencyMap;
+  statsMap.forEach((stat) => {
+    if (hasRecentActivity) {
+      // Current month count has high weight (x15), previous month provides strong base order (x1),
+      // and overall historical activity breaks ties (x0.01)
+      stat.score = stat.currentMonthCount * 15 + stat.lastMonthCount * 1 + stat.priorCount * 0.01;
+    } else {
+      stat.score = stat.totalCount;
+    }
+
+    if (stat.currentMonthCount > 0) {
+      stat.displayCount = stat.currentMonthCount;
+      stat.displayLabel = `이번달 ${stat.currentMonthCount}회 사용 (전월 ${stat.lastMonthCount}회 / 총 ${stat.totalCount}회)`;
+    } else if (stat.lastMonthCount > 0) {
+      stat.displayCount = stat.lastMonthCount;
+      stat.displayLabel = `전월 ${stat.lastMonthCount}회 사용 (총 ${stat.totalCount}회)`;
+    } else if (stat.totalCount > 0) {
+      stat.displayCount = stat.totalCount;
+      stat.displayLabel = `총 ${stat.totalCount}회 사용`;
+    } else {
+      stat.displayCount = 0;
+      stat.displayLabel = '신규 / 미사용';
+    }
+  });
+
+  return statsMap;
+}
+
+/**
+ * Returns score map for categories using the smart recency weighting
+ */
+export function getCategoryFrequencyUpToLastMonth(
+  transactions: Transaction[],
+  targetDateOrMonth?: string
+): Map<string, number> {
+  const statsMap = getSmartUsageFrequencyMap(transactions, targetDateOrMonth, 'category');
+  const scoreMap = new Map<string, number>();
+  statsMap.forEach((stat, key) => {
+    scoreMap.set(key, stat.score);
+  });
+  return scoreMap;
+}
+
+/**
+ * Returns score map for payment methods using the smart recency weighting
+ */
+export function getPaymentMethodSmartFrequency(
+  transactions: Transaction[],
+  targetDateOrMonth?: string
+): Map<string, number> {
+  const statsMap = getSmartUsageFrequencyMap(transactions, targetDateOrMonth, 'paymentMethod');
+  const scoreMap = new Map<string, number>();
+  statsMap.forEach((stat, key) => {
+    scoreMap.set(key, stat.score);
+  });
+  return scoreMap;
 }
 
 /**
@@ -468,7 +567,7 @@ export function sortCategoriesByPastFrequency(
     if (countB !== countA) {
       return countB - countA;
     }
-    return 0;
+    return a.localeCompare(b);
   });
 }
 
