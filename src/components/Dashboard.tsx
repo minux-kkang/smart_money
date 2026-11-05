@@ -213,6 +213,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   });
   // Selected category for temporary drill-down popup modal
   const [selectedCategoryDetail, setSelectedCategoryDetail] = useState<string | null>(null);
+  // Selected spending type (고정예산, 일반지출, 특별지출) for drill-down popup modal
+  const [selectedSpendingTypeDetail, setSelectedSpendingTypeDetail] = useState<'recurring' | 'routine' | 'special' | null>(null);
 
   // Month selector auto-scroll refs
   const monthScrollContainerRef = React.useRef<HTMLDivElement>(null);
@@ -758,6 +760,120 @@ export const Dashboard: React.FC<DashboardProps> = ({
       color,
     };
   }, [transactions, selectedCategoryDetail, selectedMonthFilter, categoryStats.list, excludeSpecialExpense]);
+
+  // Transactions belonging to selectedSpendingTypeDetail for temporary drill-down modal
+  const spendingTypeModalData = useMemo(() => {
+    if (!selectedSpendingTypeDetail) return null;
+
+    const matchedList: Array<{
+      tx: Transaction;
+      subItemName?: string;
+      matchedAmount: number;
+      isSubItem: boolean;
+      category: string;
+      isRecurring: boolean;
+      isSpecial: boolean;
+    }> = [];
+
+    let totalAmount = 0;
+
+    transactions.forEach((t) => {
+      // Must be an expense transaction
+      if (t.type && t.type !== 'expense') return;
+
+      // Respect month filter if selected
+      if (selectedMonthFilter !== 'all') {
+        const mNum = parseInt(selectedMonthFilter, 10);
+        const txMonth = extractMonthFromDate(t.date, t.sheetTitle);
+        if (txMonth !== null && txMonth !== mNum) return;
+      }
+
+      const isRec = Boolean(
+        t.isRecurring ||
+        t.memo?.includes('[정기예산]') ||
+        t.memo?.includes('[고정지출]') ||
+        t.memo?.includes('[정기지출]') ||
+        t.memo?.includes('[고정]')
+      );
+      const isSpec = Boolean(
+        t.isSpecial ||
+        t.memo?.includes('[특별지출]') ||
+        t.memo?.includes('[비정기지출]') ||
+        t.memo?.includes('[특별]') ||
+        t.memo?.includes('[비정기]')
+      );
+      const isRout = !isRec && !isSpec;
+
+      let matches = false;
+      if (selectedSpendingTypeDetail === 'recurring' && isRec) matches = true;
+      if (selectedSpendingTypeDetail === 'routine' && isRout) matches = true;
+      if (selectedSpendingTypeDetail === 'special' && isSpec) matches = true;
+
+      if (!matches) return;
+
+      // If transaction has subItems, list the subItems
+      if (t.subItems && t.subItems.length > 0) {
+        t.subItems.forEach((sub) => {
+          const amt = Number(sub.amount) || 0;
+          totalAmount += amt;
+          matchedList.push({
+            tx: t,
+            subItemName: sub.name,
+            matchedAmount: amt,
+            isSubItem: true,
+            category: sub.category || t.category || '기타',
+            isRecurring: isRec,
+            isSpecial: isSpec,
+          });
+        });
+      } else {
+        totalAmount += t.amount;
+        matchedList.push({
+          tx: t,
+          matchedAmount: t.amount,
+          isSubItem: false,
+          category: t.category || '기타',
+          isRecurring: isRec,
+          isSpecial: isSpec,
+        });
+      }
+    });
+
+    // Sort by date descending
+    matchedList.sort((a, b) => (b.tx.date || '').localeCompare(a.tx.date || ''));
+
+    const meta =
+      selectedSpendingTypeDetail === 'recurring'
+        ? {
+            title: '고정 예산',
+            icon: '📌',
+            color: '#9333EA', // purple-600
+            desc: '매월 정기적으로 지출되는 고정 예산(월세, 관리비, 공과금, 구독료, 통신비 등) 내역입니다.',
+            filterVal: 'recurring' as const,
+          }
+        : selectedSpendingTypeDetail === 'special'
+        ? {
+            title: '특별(비정기) 지출',
+            icon: '🛋️',
+            color: '#F59E0B', // amber-500
+            desc: '가전, 가구, 여행, 경조사 등 가끔 발생하는 대형 비정기 지출 내역입니다.',
+            filterVal: 'special' as const,
+          }
+        : {
+            title: '일반 일상 지출',
+            icon: '🛒',
+            color: '#FB7185', // rose-400
+            desc: '식비, 생필품, 카페, 쇼핑 등 일상에서 반복되는 변동 지출 내역입니다.',
+            filterVal: 'routine' as const,
+          };
+
+    return {
+      type: selectedSpendingTypeDetail,
+      ...meta,
+      items: matchedList,
+      totalAmount,
+    };
+  }, [transactions, selectedSpendingTypeDetail, selectedMonthFilter]);
 
 
   // Unique categories for filter dropdown
@@ -1459,36 +1575,53 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <span className="text-[11px] font-black text-slate-600 flex items-center gap-1">
               <span>지출 유형 분석:</span>
             </span>
-            <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-purple-500" />
-              <span className="font-bold text-slate-700 text-[11px]">
+            <button
+              type="button"
+              onClick={() => setSelectedSpendingTypeDetail('recurring')}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-purple-100/80 active:scale-95 transition cursor-pointer text-left group"
+              title="클릭하여 고정 예산 상세 내역 모아보기"
+            >
+              <span className="w-2 h-2 rounded-full bg-purple-500 group-hover:scale-125 transition shrink-0" />
+              <span className="font-bold text-slate-700 text-[11px] group-hover:text-purple-950">
                 📌 고정 예산:{' '}
                 <strong className="text-purple-700 font-black">
                   {metrics.recurringExpense.toLocaleString('ko-KR')}원
                 </strong>
                 <span className="text-[10px] text-purple-600 ml-0.5">({metrics.recurringRate}%)</span>
               </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-rose-400" />
-              <span className="font-bold text-slate-700 text-[11px]">
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSelectedSpendingTypeDetail('routine')}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-rose-100/80 active:scale-95 transition cursor-pointer text-left group"
+              title="클릭하여 일반 일상 지출 상세 내역 모아보기"
+            >
+              <span className="w-2 h-2 rounded-full bg-rose-400 group-hover:scale-125 transition shrink-0" />
+              <span className="font-bold text-slate-700 text-[11px] group-hover:text-rose-950">
                 🛒 일반 일상 지출:{' '}
                 <strong className="text-slate-900 font-black">
                   {metrics.routineExpense.toLocaleString('ko-KR')}원
                 </strong>
                 <span className="text-[10px] text-slate-500 ml-0.5">({metrics.routineRate}%)</span>
               </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <span className="w-2 h-2 rounded-full bg-amber-500" />
-              <span className="font-bold text-slate-700 text-[11px]">
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setSelectedSpendingTypeDetail('special')}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-amber-100/80 active:scale-95 transition cursor-pointer text-left group"
+              title="클릭하여 특별(비정기) 지출 상세 내역 모아보기"
+            >
+              <span className="w-2 h-2 rounded-full bg-amber-500 group-hover:scale-125 transition shrink-0" />
+              <span className="font-bold text-slate-700 text-[11px] group-hover:text-amber-950">
                 🛋️ 특별(비정기) 지출:{' '}
                 <strong className="text-amber-800 font-black">
                   {metrics.specialExpense.toLocaleString('ko-KR')}원
                 </strong>
                 <span className="text-[10px] text-amber-700 ml-0.5">({metrics.specialRate}%)</span>
               </span>
-            </div>
+            </button>
           </div>
 
           <div className="flex items-center gap-3 shrink-0 ml-auto">
@@ -1516,20 +1649,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
             {/* Proportion Progress Bar (Purple, Rose, Amber) */}
             {metrics.totalExpense > 0 && (
               <div
-                className="w-28 sm:w-36 h-2 bg-slate-200 rounded-full overflow-hidden flex shrink-0"
-                title={`고정예산 ${metrics.recurringRate}% / 일상지출 ${metrics.routineRate}% / 특별지출 ${metrics.specialRate}%`}
+                className="w-28 sm:w-36 h-2 bg-slate-200 rounded-full overflow-hidden flex shrink-0 cursor-pointer shadow-2xs"
+                title="클릭하여 지출 유형별 상세 내역 모아보기"
               >
                 <div
                   style={{ width: `${metrics.recurringRate}%` }}
-                  className="bg-purple-600 h-full transition-all"
+                  onClick={() => setSelectedSpendingTypeDetail('recurring')}
+                  className="bg-purple-600 h-full hover:opacity-75 transition cursor-pointer"
+                  title={`클릭하여 고정 예산 내역 모아보기: ${metrics.recurringExpense.toLocaleString('ko-KR')}원 (${metrics.recurringRate}%)`}
                 />
                 <div
                   style={{ width: `${metrics.routineRate}%` }}
-                  className="bg-rose-400 h-full transition-all"
+                  onClick={() => setSelectedSpendingTypeDetail('routine')}
+                  className="bg-rose-400 h-full hover:opacity-75 transition cursor-pointer"
+                  title={`클릭하여 일반 일상 지출 내역 모아보기: ${metrics.routineExpense.toLocaleString('ko-KR')}원 (${metrics.routineRate}%)`}
                 />
                 <div
                   style={{ width: `${metrics.specialRate}%` }}
-                  className="bg-amber-500 h-full transition-all"
+                  onClick={() => setSelectedSpendingTypeDetail('special')}
+                  className="bg-amber-500 h-full hover:opacity-75 transition cursor-pointer"
+                  title={`클릭하여 특별 지출 내역 모아보기: ${metrics.specialExpense.toLocaleString('ko-KR')}원 (${metrics.specialRate}%)`}
                 />
               </div>
             )}
@@ -3986,6 +4125,196 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedCategoryDetail(null)}
+                className="px-4 py-1.5 rounded-xl text-xs font-bold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 transition cursor-pointer shadow-2xs"
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 8. Temporary Spending Type Detail Drill-Down Modal (고정예산, 일반지출, 특별지출) */}
+      {spendingTypeModalData && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-200"
+          onClick={() => setSelectedSpendingTypeDetail(null)}
+        >
+          <div
+            className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-slate-200 flex flex-col max-h-[90vh] overflow-hidden animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div className="px-5 py-4 border-b border-slate-200 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span
+                  className="w-3.5 h-3.5 rounded-full shrink-0 shadow-xs ring-2 ring-white/30"
+                  style={{ backgroundColor: spendingTypeModalData.color }}
+                />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-base font-black truncate">
+                      {spendingTypeModalData.icon} {spendingTypeModalData.title} 내역 모아보기
+                    </h3>
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-white/15 text-slate-200">
+                      {selectedMonthFilter === 'all' ? '전체 기간' : `${selectedMonthFilter}월`}
+                    </span>
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-blue-600/80 text-white">
+                      총 {spendingTypeModalData.items.length}건
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 mt-0.5 font-medium">
+                    {spendingTypeModalData.desc}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setSelectedSpendingTypeDetail(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-xl hover:bg-white/10 transition cursor-pointer shrink-0 ml-2"
+                title="닫기 (ESC)"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Quick Actions Bar */}
+            <div className="px-5 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2 text-xs flex-wrap">
+              <div className="flex items-center gap-1.5">
+                <span className="text-slate-500 font-bold">{spendingTypeModalData.title} 총액:</span>
+                <span className="text-sm font-black text-rose-600">
+                  {spendingTypeModalData.totalAmount.toLocaleString('ko-KR')}원
+                </span>
+                {spendingTypeModalData.items.length > 0 && (
+                  <span className="text-[11px] text-slate-400 font-medium">
+                    (건당 평균 {Math.round(spendingTypeModalData.totalAmount / spendingTypeModalData.items.length).toLocaleString('ko-KR')}원)
+                  </span>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedRecurringFilter(spendingTypeModalData.filterVal);
+                  setSelectedSpendingTypeDetail(null);
+                }}
+                className="px-2.5 py-1 bg-white hover:bg-blue-50 border border-slate-300 hover:border-blue-400 text-blue-700 font-bold rounded-lg text-xs flex items-center gap-1 transition cursor-pointer shadow-2xs"
+                title="메인 가계부 목록의 지출형태 필터를 이 유형으로 변경"
+              >
+                <Filter className="w-3.5 h-3.5" />
+                <span>메인 목록에서 이 지출형태만 필터링</span>
+              </button>
+            </div>
+
+            {/* Modal Body / Transactions List */}
+            <div className="p-4 sm:p-5 overflow-y-auto space-y-2 flex-1">
+              {spendingTypeModalData.items.length === 0 ? (
+                <div className="py-12 text-center text-slate-400 space-y-1">
+                  <p className="text-2xl mb-1">{spendingTypeModalData.icon}</p>
+                  <p className="text-xs font-bold text-slate-500">
+                    선택한 기간 동안 '{spendingTypeModalData.title}' 내역이 없습니다.
+                  </p>
+                  <p className="text-[11px] text-slate-400">
+                    월 필터를 '전체'로 변경하면 다른 달의 내역도 확인할 수 있습니다.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  {spendingTypeModalData.items.map((item, idx) => {
+                    return (
+                      <div
+                        key={`${item.tx.id}-${idx}`}
+                        onClick={() => {
+                          setSelectedSpendingTypeDetail(null);
+                          handleOpenEditModal(item.tx);
+                        }}
+                        className="p-3 bg-white hover:bg-blue-50/60 rounded-xl border border-slate-200 hover:border-blue-300 transition flex items-center justify-between gap-3 text-xs cursor-pointer group shadow-2xs"
+                        title="클릭하여 이 내역 수정"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono text-slate-500 text-[11px] font-bold">
+                              {formatShortDate(item.tx.date)}
+                            </span>
+                            {item.category && (
+                              <span className="text-[10px] text-slate-600 bg-slate-100 px-1.5 py-0.2 rounded font-bold border border-slate-200">
+                                {item.category}
+                              </span>
+                            )}
+                            {item.isSubItem ? (
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.2 rounded font-bold border border-blue-200">
+                                  {item.tx.description} 세부품목
+                                </span>
+                                <span className="font-extrabold text-slate-900 truncate">
+                                  {item.subItemName}
+                                </span>
+                              </div>
+                            ) : (
+                              <span
+                                className={`font-extrabold truncate ${
+                                  item.isSpecial
+                                    ? 'text-amber-800 font-black'
+                                    : item.isRecurring
+                                    ? 'text-purple-700 font-black'
+                                    : 'text-slate-900'
+                                }`}
+                              >
+                                {item.tx.description}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-400">
+                            {item.tx.paymentMethod && (
+                              <span className="text-slate-600 font-medium">
+                                {item.tx.paymentMethod}
+                              </span>
+                            )}
+                            {item.tx.memo && (
+                              <>
+                                <span>•</span>
+                                <span className="truncate max-w-[200px] text-slate-500">
+                                  {item.tx.memo}
+                                </span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0 flex items-center gap-3">
+                          <span className="text-sm font-black text-rose-600">
+                            {item.matchedAmount.toLocaleString('ko-KR')}원
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedSpendingTypeDetail(null);
+                              handleOpenEditModal(item.tx);
+                            }}
+                            className="p-1 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-blue-100/60 transition cursor-pointer"
+                            title="내역 수정"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Modal Footer */}
+            <div className="px-5 py-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2">
+              <span className="text-xs text-slate-500 font-medium">
+                목록 항목을 클릭하면 바로 수정 창이 열립니다.
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelectedSpendingTypeDetail(null)}
                 className="px-4 py-1.5 rounded-xl text-xs font-bold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 transition cursor-pointer shadow-2xs"
               >
                 닫기
