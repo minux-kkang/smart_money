@@ -2182,7 +2182,7 @@ export default function App() {
         {/* Full Width Main Display Area */}
         <div className="w-full space-y-6">
           {activeTab === 'matrix' ? (
-            <AnnualMatrixView yearData={yearData} onSelectMonth={handleSelectSheetTab} />
+            <AnnualMatrixView yearData={yearData} onSelectMonth={handleSelectSheetTab} transactions={transactions} />
           ) : activeTab === 'monthly' ? (
             <Dashboard
               transactions={(() => {
