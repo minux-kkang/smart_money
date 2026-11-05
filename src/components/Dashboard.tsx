@@ -207,8 +207,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [sortField, setSortField] = useState<'recent' | 'date' | 'amount'>('date');
   const [sortAsc, setSortAsc] = useState<boolean>(false);
 
-  // Collapsible category ranking box state
-  const [isCategoryRankCollapsed, setIsCategoryRankCollapsed] = useState<boolean>(false);
+  // Collapsible category ranking box state (collapsed by default on mobile so transactions are immediately visible)
+  const [isCategoryRankCollapsed, setIsCategoryRankCollapsed] = useState<boolean>(() => {
+    return typeof window !== 'undefined' ? window.innerWidth < 1024 : false;
+  });
   // Selected category for temporary drill-down popup modal
   const [selectedCategoryDetail, setSelectedCategoryDetail] = useState<string | null>(null);
 
@@ -904,6 +906,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
     sortField,
     sortAsc,
   ]);
+
+  // Active filter state and reset helper
+  const hasActiveFilters = Boolean(
+    searchQuery.trim() ||
+    selectedTypeFilter !== 'all' ||
+    selectedRecurringFilter !== 'all' ||
+    selectedCategoryFilter !== 'all' ||
+    excludeSpecialExpense
+  );
+
+  const handleResetFilters = () => {
+    setSearchQuery('');
+    setSelectedTypeFilter('all');
+    setSelectedRecurringFilter('all');
+    setSelectedCategoryFilter('all');
+    setExcludeSpecialExpense(false);
+  };
 
   // Checkbox selection helpers
   const handleToggleSelectAll = () => {
@@ -1633,36 +1652,38 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <div
           className={`${
             isCategoryRankCollapsed ? 'lg:col-span-3' : 'lg:col-span-2'
-          } p-5 sm:p-6 bg-white rounded-2xl border-2 border-slate-200 shadow-sm flex flex-col relative transition-all duration-200`}
+          } p-3.5 sm:p-5 bg-white rounded-2xl border-2 border-slate-200 shadow-sm flex flex-col relative transition-all duration-200`}
         >
-          {/* Table Header and Actions */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
-            <div>
-              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-                <h3 className="text-base font-black text-slate-900 whitespace-nowrap">가계부 내역 상세</h3>
-                <span className="text-xs font-black px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap shrink-0">
-                  {filteredTransactions.length}건
+          {/* 1. Compact Table Header and Actions */}
+          <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-200">
+            <div className="flex items-center gap-2 min-w-0">
+              <h3 className="text-sm sm:text-base font-black text-slate-900 whitespace-nowrap">가계부 내역</h3>
+              <span className="text-xs font-black px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap shrink-0">
+                {filteredTransactions.length}건
+              </span>
+              {isRealGoogleConnected ? (
+                <span
+                  className="text-[10px] sm:text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1 whitespace-nowrap shrink-0"
+                  title="Google 스프레드시트 실시간 동기화 중"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>실시간 연동</span>
                 </span>
-                {isRealGoogleConnected && (
-                  <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1 whitespace-nowrap shrink-0">
-                    <FileSpreadsheet className="w-3 h-3" />
-                    <span>Google 시트 수정/삭제 즉시 반영</span>
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-slate-600 font-medium mt-0.5">
-                수정 및 삭제 시 Google 스프레드시트의 실제 데이터가 안전하고 정확하게 즉시 갱신됩니다.
-              </p>
+              ) : (
+                <span className="text-[10px] font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-100 whitespace-nowrap shrink-0">
+                  샘플 모드
+                </span>
+              )}
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5 shrink-0">
               {sheetTabs.length > 1 && onSelectSheetTab && (
-                <div className="flex items-center gap-1.5 text-xs whitespace-nowrap shrink-0">
-                  <span className="font-bold text-slate-500">시트 탭:</span>
+                <div className="flex items-center gap-1 text-xs shrink-0">
                   <select
                     value={activeSheetTitle}
                     onChange={(e) => onSelectSheetTab(e.target.value)}
-                    className="px-2.5 py-1.5 bg-white border-2 border-blue-200 rounded-xl font-black text-blue-700 shadow-xs cursor-pointer hover:border-blue-400 whitespace-nowrap"
+                    className="px-2 py-1 bg-white border border-blue-300 rounded-lg font-black text-xs text-blue-700 shadow-2xs cursor-pointer hover:border-blue-500 whitespace-nowrap"
+                    title="시트 탭 선택"
                   >
                     {sheetTabs.map((tab) => (
                       <option key={tab.id} value={tab.title}>
@@ -1675,67 +1696,37 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
               <button
                 onClick={handleExportCSV}
-                className="px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 border-2 border-slate-200 transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0"
+                className="p-1 sm:px-2.5 sm:py-1 rounded-lg text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 transition flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
                 title="CSV로 내보내기"
               >
                 <Download className="w-3.5 h-3.5 text-slate-600" />
-                <span>CSV 다운</span>
+                <span className="hidden sm:inline">CSV</span>
               </button>
             </div>
           </div>
 
-          {/* Informational Guidance for Sheet Data and Rows */}
-          {!isRealGoogleConnected ? (
-            <div className="mt-3 p-3 bg-blue-50/90 border border-blue-200 rounded-xl flex items-center justify-between gap-2 text-xs text-blue-900 whitespace-nowrap overflow-x-auto scrollbar-none">
-              <div className="flex items-center gap-2 shrink-0">
-                <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
-                <span>
-                  <strong>[{activeSheetTitle}]</strong> 상세 거래 내역 (총 <strong>{filteredTransactions.length}건</strong> 표시 중 / 샘플 모드)
-                </span>
-              </div>
-              <span className="text-[11px] font-semibold text-blue-700 bg-white px-2 py-0.5 rounded-lg border border-blue-200 shrink-0">
-                Google 계정 연동 시 실제 시트 원본 로드
-              </span>
-            </div>
-          ) : (
-            <div className="mt-3 p-3 bg-emerald-50/90 border border-emerald-200 rounded-xl flex items-center justify-between gap-2 text-xs text-emerald-900 whitespace-nowrap overflow-x-auto scrollbar-none">
-              <div className="flex items-center gap-2 shrink-0">
-                <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>
-                  Google 시트 <strong>[{activeSheetTitle}]</strong> 탭 실시간 연동 (총 <strong>{filteredTransactions.length}건</strong> 로드됨)
-                </span>
-              </div>
-              <span className="text-[11px] font-bold text-emerald-700 bg-white px-2.5 py-0.5 rounded-lg border border-emerald-200 shrink-0">
-                수정/삭제 즉시 시트 반영
-              </span>
-            </div>
-          )}
-
-          {/* Month Quick Filter Pills Bar */}
-          <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between gap-1.5 flex-wrap sm:flex-nowrap">
+          {/* 2. Tight Month Quick Filter Pills Bar */}
+          <div className="py-2 flex items-center justify-between gap-1 border-b border-slate-100">
             <div
               ref={monthScrollContainerRef}
-              className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-none min-w-0 flex-1 scroll-smooth"
+              className="flex items-center gap-1 overflow-x-auto pb-0.5 scrollbar-none min-w-0 flex-1 scroll-smooth"
             >
-              <span className="text-[11px] font-bold text-slate-500 shrink-0 mr-1">월 선택:</span>
-
-              {/* Prev Month Arrow */}
               <button
                 type="button"
                 onClick={goToPrevMonth}
-                className="p-1 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition cursor-pointer shrink-0"
-                title="이전 달 (좌우 스와이프로도 이동 가능)"
+                className="p-1 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition cursor-pointer shrink-0"
+                title="이전 달"
               >
-                <ChevronLeft className="w-4 h-4" />
+                <ChevronLeft className="w-3.5 h-3.5" />
               </button>
 
               <button
                 ref={selectedMonthFilter === 'all' ? activeMonthBadgeRef : undefined}
                 onClick={() => setSelectedMonthFilter('all')}
-                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer shrink-0 ${
+                className={`px-2 py-1 rounded-lg text-xs font-bold transition cursor-pointer shrink-0 ${
                   selectedMonthFilter === 'all'
-                    ? 'bg-blue-600 text-white shadow-xs font-black ring-2 ring-blue-300'
-                    : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                    ? 'bg-blue-600 text-white shadow-xs font-black'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
                 전체 ({transactions.length})
@@ -1755,11 +1746,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         onSelectSheetTab(`${m}월`);
                       }
                     }}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer shrink-0 ${
+                    className={`px-2 py-1 rounded-lg text-xs font-bold transition cursor-pointer shrink-0 ${
                       isSelected
-                        ? 'bg-blue-600 text-white shadow-xs font-black ring-2 ring-blue-300'
+                        ? 'bg-blue-600 text-white shadow-xs font-black'
                         : count > 0
-                        ? 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                        ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 font-extrabold'
                         : 'bg-slate-50 text-slate-400 hover:bg-slate-100'
                     }`}
                   >
@@ -1768,114 +1759,60 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 );
               })}
 
-              {/* Next Month Arrow */}
               <button
                 type="button"
                 onClick={goToNextMonth}
-                className="p-1 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition cursor-pointer shrink-0"
-                title="다음 달 (좌우 스와이프로도 이동 가능)"
+                className="p-1 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition cursor-pointer shrink-0"
+                title="다음 달"
               >
-                <ChevronRight className="w-4 h-4" />
+                <ChevronRight className="w-3.5 h-3.5" />
               </button>
             </div>
-
-            <span className="text-[10px] text-slate-400 font-medium whitespace-nowrap shrink-0 hidden md:inline-block">
-              화면 좌우 스와이프로 월 이동 가능
-            </span>
           </div>
 
-          {/* Search & Filter Controls */}
-          <div className="py-3 flex flex-wrap items-center gap-2">
-            {/* Search Input */}
-            <div className="relative flex-1 min-w-[180px]">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                placeholder="내용, 사용처, 분류, 메모 검색..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full pl-8 pr-3 py-1.5 bg-white border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-600"
-              />
-            </div>
+          {/* 3. High-Efficiency Compact Search & Filters */}
+          <div className="py-2 space-y-1.5">
+            {/* Row 1: Search + Type + Sort + Selection */}
+            <div className="flex items-center gap-1.5">
+              {/* Search input with quick clear */}
+              <div className="relative flex-1 min-w-[120px]">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="내용, 사용처, 분류 검색..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-7 pr-6 py-1.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-600 focus:bg-white transition"
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer p-0.5"
+                    title="검색어 지우기"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
 
-            {/* Type Filter */}
-            <select
-              value={selectedTypeFilter}
-              onChange={(e) => setSelectedTypeFilter(e.target.value as any)}
-              className="px-2.5 py-1.5 bg-white border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-700 cursor-pointer whitespace-nowrap shrink-0"
-            >
-              <option value="all">전체 구분</option>
-              <option value="expense">지출만</option>
-              <option value="income">수입만</option>
-              <option value="transfer">이체만</option>
-            </select>
-
-            {/* 1-Click Toggle: Exclude Special Expense */}
-            <button
-              type="button"
-              onClick={() => setExcludeSpecialExpense((prev) => !prev)}
-              className={`px-2.5 py-1.5 border-2 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
-                excludeSpecialExpense
-                  ? 'bg-amber-500 text-white border-amber-600 shadow-xs'
-                  : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
-              }`}
-              title={
-                excludeSpecialExpense
-                  ? '현재 특별 지출이 제외되어 일상 지출만 표시 중입니다. 클릭하면 특별 지출 포함'
-                  : '침대, 가전, 이사 등 가끔 있는 대형 비정기 지출을 목록에서 빼고 일상 지출만 분리'
-              }
-            >
-              <span>🛋️ 특별지출 제외</span>
-              <span
-                className={`w-7 h-3.5 rounded-full p-0.5 transition flex items-center ${
-                  excludeSpecialExpense ? 'bg-amber-800 justify-end' : 'bg-slate-300 justify-start'
+              {/* Type Filter */}
+              <select
+                value={selectedTypeFilter}
+                onChange={(e) => setSelectedTypeFilter(e.target.value as any)}
+                className={`px-2 py-1.5 border rounded-xl text-xs font-bold cursor-pointer whitespace-nowrap shrink-0 transition ${
+                  selectedTypeFilter !== 'all'
+                    ? 'bg-blue-50 border-blue-400 text-blue-800'
+                    : 'bg-white border-slate-300 text-slate-700'
                 }`}
               >
-                <span className="w-2.5 h-2.5 rounded-full bg-white shadow-2xs block" />
-              </span>
-            </button>
-
-            {/* Budget Classification Filter */}
-            <select
-              value={selectedRecurringFilter}
-              onChange={(e) => setSelectedRecurringFilter(e.target.value as any)}
-              className={`px-2.5 py-1.5 border-2 rounded-xl text-xs font-bold cursor-pointer whitespace-nowrap shrink-0 transition ${
-                selectedRecurringFilter !== 'all'
-                  ? selectedRecurringFilter === 'special'
-                    ? 'bg-amber-50 border-amber-400 text-amber-900'
-                    : selectedRecurringFilter === 'recurring'
-                    ? 'bg-purple-50 border-purple-400 text-purple-800'
-                    : 'bg-blue-50 border-blue-400 text-blue-900'
-                  : 'bg-white border-slate-200 text-slate-700'
-              }`}
-              title="지출 형태 필터링"
-            >
-              <option value="all">모든 지출형태</option>
-              <option value="routine">🛒 일반 일상 지출만</option>
-              <option value="recurring">📌 고정 예산만</option>
-              <option value="special">🛋️ 특별(비정기) 지출만</option>
-              <option value="variable">변동 지출 전체(일상+특별)</option>
-            </select>
-
-
-            {/* Category Filter */}
-            {allCategories.length > 0 && (
-              <select
-                value={selectedCategoryFilter}
-                onChange={(e) => setSelectedCategoryFilter(e.target.value)}
-                className="px-2.5 py-1.5 bg-white border-2 border-slate-200 rounded-xl text-xs font-bold text-slate-700 max-w-[130px] truncate cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <option value="all">모든 분류</option>
-                {allCategories.map((cat) => (
-                  <option key={cat} value={cat}>
-                    {cat}
-                  </option>
-                ))}
+                <option value="all">전체 구분</option>
+                <option value="expense">지출만</option>
+                <option value="income">수입만</option>
+                <option value="transfer">이체만</option>
               </select>
-            )}
 
-            {/* Sort Order Selector */}
-            <div className="relative flex items-center shrink-0">
+              {/* Sort Order Selector */}
               <select
                 value={
                   sortField === 'recent'
@@ -1906,73 +1843,153 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     setSortAsc(true);
                   }
                 }}
-                className={`px-2.5 py-1.5 border-2 rounded-xl text-xs font-bold cursor-pointer whitespace-nowrap shrink-0 transition ${
+                className={`px-2 py-1.5 border rounded-xl text-xs font-bold cursor-pointer whitespace-nowrap shrink-0 transition ${
                   sortField === 'date'
                     ? 'bg-blue-50 border-blue-400 text-blue-800'
-                    : 'bg-white border-slate-200 text-slate-700'
+                    : 'bg-white border-slate-300 text-slate-700'
                 }`}
-                title="정렬 기준 선택 (날짜순 기본 정렬)"
+                title="정렬 기준"
               >
-                <option value="date_desc">날짜 최신순 (기본)</option>
-                <option value="date_asc">날짜 오래된순</option>
+                <option value="date_desc">날짜순 (최신)</option>
+                <option value="date_asc">날짜순 (과거)</option>
                 <option value="recent_desc">최근 입력순</option>
                 <option value="amount_desc">금액 높은순</option>
                 <option value="amount_asc">금액 낮은순</option>
               </select>
+
+              {/* Multi-Selection Mode Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (isSelectionMode) {
+                    setIsSelectionMode(false);
+                    setSelectedIds(new Set());
+                  } else {
+                    setIsSelectionMode(true);
+                  }
+                }}
+                className={`px-2.5 py-1.5 border rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 ${
+                  isSelectionMode
+                    ? 'bg-blue-600 border-blue-600 text-white shadow-xs'
+                    : 'bg-white hover:bg-slate-50 border-slate-300 text-slate-700'
+                }`}
+                title="다중 선택 모드 (또는 내역 길게 누르기)"
+              >
+                <CheckSquare className="w-3.5 h-3.5" />
+                <span>{isSelectionMode ? '선택 취소' : '선택'}</span>
+              </button>
             </div>
 
-            {/* Selection Mode Button */}
-            <button
-              onClick={() => {
-                if (isSelectionMode) {
-                  setIsSelectionMode(false);
-                  setSelectedIds(new Set());
-                } else {
-                  setIsSelectionMode(true);
-                }
-              }}
-              className={`px-2.5 py-1.5 border-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap shrink-0 ${
-                isSelectionMode
-                  ? 'bg-blue-600 border-blue-600 text-white shadow-xs'
-                  : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
-              }`}
-              title="다중 선택 모드 (또는 내역을 길게 누르세요)"
-            >
-              <CheckSquare className="w-3.5 h-3.5" />
-              <span>{isSelectionMode ? '선택 취소' : '선택'}</span>
-            </button>
+            {/* Row 2: Smooth Horizontal Scrollable Filter Chips (never wraps to 3rd or 4th row!) */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-none text-xs">
+              {/* Category Filter Pill */}
+              {allCategories.length > 0 && (
+                <select
+                  value={selectedCategoryFilter}
+                  onChange={(e) => setSelectedCategoryFilter(e.target.value)}
+                  className={`px-2 py-1 border rounded-lg text-[11px] font-bold max-w-[120px] truncate cursor-pointer whitespace-nowrap shrink-0 transition ${
+                    selectedCategoryFilter !== 'all'
+                      ? 'bg-blue-600 text-white border-blue-700'
+                      : 'bg-white border-slate-200 text-slate-700'
+                  }`}
+                  title="분류별 필터"
+                >
+                  <option value="all">모든 분류</option>
+                  {allCategories.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </select>
+              )}
 
-            {/* Amount Sign Mode Toggle (양수 통일 vs 지출- · 수입+ 부호 고정) */}
-            <button
-              type="button"
-              onClick={() => {
-                const next = amountSignMode === 'positive' ? 'signed' : 'positive';
-                setAmountSignMode(next);
-                try {
-                  localStorage.setItem('smart_money_amount_sign_mode', next);
-                } catch {}
-              }}
-              className={`px-2.5 py-1.5 border-2 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap shrink-0 ${
-                amountSignMode === 'positive'
-                  ? 'bg-emerald-50/70 border-emerald-300 text-emerald-800 hover:bg-emerald-100'
-                  : 'bg-indigo-50/70 border-indigo-300 text-indigo-800 hover:bg-indigo-100'
-              }`}
-              title="클릭하여 금액 표기 전환: 카테고리/구분이 있으므로 음수 없이 양수 통일하거나, 지출(-)·수입(+) 부호로 고정"
-            >
-              <span className="font-mono font-black text-[11px] px-1 py-0.2 rounded bg-white border border-current">
-                {amountSignMode === 'positive' ? '₩+' : '±'}
-              </span>
-              <span>{amountSignMode === 'positive' ? '양수 통일' : '지출(-)·수입(+)'}</span>
-            </button>
+              {/* Expenditure Type Filter Pill */}
+              <select
+                value={selectedRecurringFilter}
+                onChange={(e) => setSelectedRecurringFilter(e.target.value as any)}
+                className={`px-2 py-1 border rounded-lg text-[11px] font-bold cursor-pointer whitespace-nowrap shrink-0 transition ${
+                  selectedRecurringFilter !== 'all'
+                    ? selectedRecurringFilter === 'special'
+                      ? 'bg-amber-500 text-white border-amber-600'
+                      : selectedRecurringFilter === 'recurring'
+                      ? 'bg-purple-600 text-white border-purple-700'
+                      : 'bg-blue-600 text-white border-blue-700'
+                    : 'bg-white border-slate-200 text-slate-700'
+                }`}
+                title="지출 형태 필터링"
+              >
+                <option value="all">모든 지출형태</option>
+                <option value="routine">🛒 일반 일상만</option>
+                <option value="recurring">📌 고정 예산만</option>
+                <option value="special">🛋️ 특별(비정기)만</option>
+                <option value="variable">변동 전체(일상+특별)</option>
+              </select>
+
+              {/* 1-Click Toggle: Exclude Special Expense */}
+              <button
+                type="button"
+                onClick={() => setExcludeSpecialExpense((prev) => !prev)}
+                className={`px-2 py-1 border rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0 ${
+                  excludeSpecialExpense
+                    ? 'bg-amber-500 text-white border-amber-600 shadow-2xs'
+                    : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
+                }`}
+                title="대형 비정기 지출 제외"
+              >
+                <span>🛋️ 특별 제외</span>
+                <span
+                  className={`w-5 h-2.5 rounded-full p-0.5 transition flex items-center ${
+                    excludeSpecialExpense ? 'bg-amber-800 justify-end' : 'bg-slate-300 justify-start'
+                  }`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-white block" />
+                </span>
+              </button>
+
+              {/* Amount Sign Mode Toggle (₩+ 양수 통일 vs ± 부호 고정) */}
+              <button
+                type="button"
+                onClick={() => {
+                  const next = amountSignMode === 'positive' ? 'signed' : 'positive';
+                  setAmountSignMode(next);
+                  try {
+                    localStorage.setItem('smart_money_amount_sign_mode', next);
+                  } catch {}
+                }}
+                className={`px-2 py-1 border rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 ${
+                  amountSignMode === 'positive'
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100'
+                    : 'bg-indigo-50 border-indigo-300 text-indigo-800 hover:bg-indigo-100'
+                }`}
+                title="금액 표기 전환"
+              >
+                <span className="font-mono font-black text-[10px]">
+                  {amountSignMode === 'positive' ? '₩+' : '±'}
+                </span>
+                <span>{amountSignMode === 'positive' ? '양수 통일' : '부호 표기'}</span>
+              </button>
+
+              {/* Reset Filters Button (appears when any filter is active) */}
+              {hasActiveFilters && (
+                <button
+                  type="button"
+                  onClick={handleResetFilters}
+                  className="px-2 py-1 border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 rounded-lg text-[11px] font-black transition cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0 animate-in fade-in"
+                  title="모든 필터 초기화"
+                >
+                  <X className="w-3 h-3" />
+                  <span>필터 초기화</span>
+                </button>
+              )}
+
+              {/* Subtle User Guide Hint */}
+              {!isSelectionMode && filteredTransactions.length > 0 && (
+                <span className="text-[10px] text-slate-400 whitespace-nowrap shrink-0 ml-auto hidden md:inline">
+                  💡 내역 길게 눌러 다중선택 · 클릭하여 수정
+                </span>
+              )}
+            </div>
           </div>
-
-          {/* User Guide Hint */}
-          {!isSelectionMode && filteredTransactions.length > 0 && (
-            <div className="pb-1 text-[11px] text-slate-600 flex items-center justify-between whitespace-nowrap overflow-x-auto scrollbar-none">
-              <span className="whitespace-nowrap">💡 내역을 <strong>길게 누르면</strong> 다중 선택 모드가 켜집니다.</span>
-              <span className="hidden sm:inline whitespace-nowrap">내역을 클릭하면 바로 수정할 수 있습니다.</span>
-            </div>
-          )}
 
           {/* Clipboard Banner if transactions were copied to clipboard */}
           {clipboardItems.length > 0 && (
