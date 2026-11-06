@@ -2212,9 +2212,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <col className="w-12 sm:w-14" />
                   <col className="hidden sm:table-column sm:w-18 md:w-22" />
                   <col className="w-auto" />
-                  <col className="w-22 sm:w-28 md:w-32" />
-                  <col className="hidden md:table-column md:w-20" />
-                  <col className="w-14 sm:w-18 md:w-20" />
+                  <col className="w-24 sm:w-28 md:w-32" />
+                  <col className="w-22 sm:w-24 md:w-28" />
                 </colgroup>
                 <thead>
                   <tr className="bg-slate-100 text-slate-700 border-y-2 border-slate-200 font-black">
@@ -2279,8 +2278,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         )}
                       </div>
                     </th>
-                    <th className="py-2 sm:py-2.5 px-1.5 whitespace-nowrap hidden md:table-cell">결제수단</th>
-                    <th className="py-2 sm:py-2.5 px-0.5 sm:px-1 text-center whitespace-nowrap">관리</th>
+                    <th className="py-2 sm:py-2.5 px-1 text-center whitespace-nowrap">관리</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -2388,9 +2386,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   {t.category}
                                 </span>
                               </div>
-
+                              {/* Sub-line: Payment Method */}
+                              {t.paymentMethod && (
+                                <div className="flex items-center gap-1 mt-0.5">
+                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-semibold text-blue-900 bg-blue-200/80 border border-blue-300">
+                                    <CreditCard className="w-2.5 h-2.5 text-blue-700" />
+                                    <span>{t.paymentMethod}</span>
+                                  </span>
+                                </div>
+                              )}
                             </td>
-
 
                             {/* 금액 (묶음 전체 총액) */}
                             <td className="py-2 sm:py-2.5 px-1 sm:px-2 pr-2.5 sm:pr-3 text-right whitespace-nowrap align-middle">
@@ -2400,21 +2405,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               </span>
                             </td>
 
-                            {/* 결제수단 */}
-                            <td className="py-2 sm:py-2.5 px-1.5 text-slate-700 whitespace-nowrap text-[11px] font-bold hidden md:table-cell align-middle">
-                              {t.paymentMethod || '-'}
-                            </td>
-
                             {/* 관리 */}
-                            <td className="py-2 sm:py-2.5 px-0.5 sm:px-1 text-center whitespace-nowrap align-middle">
+                            <td className="py-2 sm:py-2.5 px-1 text-center whitespace-nowrap align-middle">
                               <div
-                                className="flex items-center justify-center gap-0.5 sm:gap-1"
+                                className="inline-flex items-center gap-0.5 bg-blue-200/80 p-0.5 rounded-lg border border-blue-300 shadow-2xs"
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 <button
                                   type="button"
                                   onClick={() => handleOpenCopyModal(t)}
-                                  className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-blue-200/80 rounded transition cursor-pointer"
+                                  className="p-1 text-blue-900 hover:text-indigo-700 hover:bg-white rounded transition cursor-pointer"
                                   title="묶음 내역 복사 & 붙여넣기"
                                 >
                                   <Copy className="w-3.5 h-3.5" />
@@ -2422,7 +2422,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => handleOpenEditModal(t)}
-                                  className="p-1 text-blue-700 hover:text-blue-900 hover:bg-blue-200/80 rounded transition cursor-pointer font-bold"
+                                  className="p-1 text-blue-950 hover:text-blue-950 hover:bg-white rounded transition cursor-pointer font-bold"
                                   title="묶음 전체 및 세부 항목 수정"
                                 >
                                   <Edit2 className="w-3.5 h-3.5" />
@@ -2430,7 +2430,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => setDeleteModalTx(t)}
-                                  className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition cursor-pointer"
+                                  className="p-1 text-rose-700 hover:text-rose-900 hover:bg-white rounded transition cursor-pointer"
                                   title="묶음 삭제"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
@@ -2528,21 +2528,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   </span>
                                 </td>
 
-                                {/* 결제수단 */}
-                                <td className="py-2 px-1.5 text-slate-400 whitespace-nowrap text-[10px] hidden md:table-cell align-middle">
-                                  -
-                                </td>
-
                                 {/* 관리 */}
-                                <td className="py-2 px-0.5 sm:px-1 text-center whitespace-nowrap align-middle">
+                                <td className="py-2 px-1 text-center whitespace-nowrap align-middle">
                                   <div
-                                    className="flex items-center justify-center gap-0.5 sm:gap-1"
+                                    className="inline-flex items-center gap-0.5 bg-blue-100/80 p-0.5 rounded-lg border border-blue-200 shadow-2xs"
                                     onClick={(e) => e.stopPropagation()}
                                   >
                                     <button
                                       type="button"
                                       onClick={() => handleOpenEditModal(t)}
-                                      className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition cursor-pointer"
+                                      className="p-1 text-blue-800 hover:text-blue-950 hover:bg-white rounded transition cursor-pointer"
                                       title="묶음 및 세부 항목 수정"
                                     >
                                       <Edit2 className="w-3.5 h-3.5" />
@@ -2587,21 +2582,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   {remainder.toLocaleString('ko-KR')}원
                                 </span>
                               </td>
-                              <td className="py-2 px-1.5 text-slate-400 whitespace-nowrap text-[10px] hidden md:table-cell align-middle">
-                                -
-                              </td>
-                              <td className="py-2 px-0.5 sm:px-1 text-center whitespace-nowrap align-middle">
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenEditModal(t);
-                                  }}
-                                  className="p-1 text-amber-700 hover:text-amber-900 hover:bg-amber-100 rounded transition cursor-pointer"
-                                  title="미할당 잔액 세부 품목 지정"
+                              <td className="py-2 px-1 text-center whitespace-nowrap align-middle">
+                                <div
+                                  className="inline-flex items-center gap-0.5 bg-amber-100/90 p-0.5 rounded-lg border border-amber-300 shadow-2xs"
+                                  onClick={(e) => e.stopPropagation()}
                                 >
-                                  <Edit2 className="w-3.5 h-3.5" />
-                                </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditModal(t)}
+                                    className="p-1 text-amber-800 hover:text-amber-950 hover:bg-white rounded transition cursor-pointer"
+                                    title="미할당 잔액 세부 품목 지정"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
                               </td>
                             </tr>
                           )}
@@ -2610,6 +2604,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     }
 
                     // 2. Regular single row for items without sub-items
+                    const isIncome = t.type === 'income';
+
                     return (
                       <tr
                         key={t.id}
@@ -2620,8 +2616,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         onTouchEnd={cancelLongPress}
                         onTouchMove={cancelLongPress}
                         onClick={() => handleRowClick(t)}
-                        className={`hover:bg-blue-50/30 transition cursor-pointer select-none group ${
-                          isSelected ? 'bg-blue-50/80 border-l-4 border-blue-600' : ''
+                        className={`transition cursor-pointer select-none group ${
+                          isSelected
+                            ? 'bg-blue-50/80 border-l-4 border-blue-600'
+                            : isIncome
+                            ? 'bg-emerald-50/30 hover:bg-emerald-50/60 border-l-4 border-emerald-500'
+                            : 'hover:bg-blue-50/30'
                         }`}
                       >
                         {/* Checkbox cell - only in selection mode */}
@@ -2646,7 +2646,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                         {/* 날짜 (Date) */}
                         <td
-                          className="py-2 sm:py-2.5 px-1 sm:px-2.5 text-slate-700 font-mono text-[11px] sm:text-xs whitespace-nowrap font-bold align-middle"
+                          className={`py-2 sm:py-2.5 px-1 sm:px-2.5 font-mono text-[11px] sm:text-xs whitespace-nowrap font-bold align-middle ${
+                            isIncome ? 'text-emerald-900' : 'text-slate-700'
+                          }`}
                           title={`전체 일자: ${t.date}`}
                         >
                           {formatShortDate(t.date)}
@@ -2659,7 +2661,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               e.stopPropagation();
                               setSelectedCategoryDetail(t.category);
                             }}
-                            className="font-bold text-slate-700 text-xs px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 block truncate max-w-full whitespace-nowrap hover:bg-blue-100 hover:text-blue-800 hover:border-blue-300 transition cursor-pointer"
+                            className={`font-bold text-xs px-2 py-0.5 rounded-md border block truncate max-w-full whitespace-nowrap transition cursor-pointer ${
+                              isIncome
+                                ? 'bg-emerald-100/90 text-emerald-800 border-emerald-300 hover:bg-emerald-200'
+                                : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-blue-100 hover:text-blue-800 hover:border-blue-300'
+                            }`}
                             title="클릭하여 이 카테고리 내역 모아보기"
                           >
                             {t.category}
@@ -2668,17 +2674,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                         {/* 내용 / 사용처 (Description) */}
                         <td className="py-2 sm:py-2.5 px-1.5 sm:px-2.5 min-w-0 align-middle">
-                          <div className="flex items-center gap-1 min-w-0">
+                          <div className="flex items-center gap-1.5 min-w-0">
                             <span
                               className={`font-bold sm:font-black text-xs sm:text-sm truncate min-w-0 flex-1 ${
-                                isTxSpecial
+                                isIncome
+                                  ? 'text-emerald-950 font-black'
+                                  : isTxSpecial
                                   ? 'text-amber-800 font-black'
                                   : isTxRecurring
                                   ? 'text-purple-700 font-black'
                                   : 'text-slate-900'
                               }`}
                               title={
-                                isTxSpecial
+                                isIncome
+                                  ? `${t.description} (입금 / 수입)`
+                                  : isTxSpecial
                                   ? `${t.description} (특별·비정기 지출)`
                                   : isTxRecurring
                                   ? `${t.description} (고정 지출)`
@@ -2693,7 +2703,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 e.stopPropagation();
                                 setSelectedCategoryDetail(t.category);
                               }}
-                              className="sm:hidden text-[9px] font-bold text-slate-500 px-1 py-0.2 rounded bg-slate-100 border border-slate-200 shrink-0 whitespace-nowrap hover:bg-blue-100 hover:text-blue-800 transition cursor-pointer"
+                              className={`sm:hidden text-[9px] font-bold px-1 py-0.2 rounded border shrink-0 whitespace-nowrap transition cursor-pointer ${
+                                isIncome
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                  : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-blue-100 hover:text-blue-800'
+                              }`}
                               title="클릭하여 이 카테고리 내역 모아보기"
                             >
                               {t.category}
@@ -2703,20 +2717,35 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 최신
                               </span>
                             )}
-                            {t.type === 'income' && (
-                              <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200 shrink-0 whitespace-nowrap">
-                                수입
+                            {isIncome && (
+                              <span className="text-[9px] font-black text-emerald-800 bg-emerald-100 px-1.5 py-0.2 rounded border border-emerald-300 shrink-0 whitespace-nowrap">
+                                입금
                               </span>
                             )}
                           </div>
 
-                          {t.memo && (
-                            <span
-                              className="hidden sm:block text-[10px] text-slate-400 truncate mt-0.5"
-                              title={t.memo}
-                            >
-                              {t.memo}
-                            </span>
+                          {/* 결제수단 및 메모: 줄 아래 깔끔하게 인라인 태그로 결합하여 오른쪽 관리 버튼과의 충돌 원천 차단 */}
+                          {(t.paymentMethod || t.memo) && (
+                            <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                              {t.paymentMethod && (
+                                <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-semibold border ${
+                                  isIncome
+                                    ? 'bg-emerald-100/80 text-emerald-800 border-emerald-200'
+                                    : 'bg-slate-100 text-slate-600 border-slate-200'
+                                }`}>
+                                  <CreditCard className={`w-2.5 h-2.5 ${isIncome ? 'text-emerald-600' : 'text-slate-400'}`} />
+                                  <span>{t.paymentMethod}</span>
+                                </span>
+                              )}
+                              {t.memo && (
+                                <span
+                                  className="text-[10px] text-slate-400 truncate max-w-xs"
+                                  title={t.memo}
+                                >
+                                  {t.memo}
+                                </span>
+                              )}
+                            </div>
                           )}
                         </td>
 
@@ -2724,35 +2753,30 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <td className="py-2 sm:py-2.5 px-1 sm:px-2 pr-2.5 sm:pr-3 text-right whitespace-nowrap align-middle">
                           <span
                             className={`font-black text-xs sm:text-sm tracking-tight ${
-                              t.type === 'income'
-                                ? 'text-emerald-600'
+                              isIncome
+                                ? 'text-emerald-600 font-black'
                                 : t.type === 'transfer'
                                 ? 'text-sky-600'
                                 : 'text-slate-900'
                             }`}
                           >
                             {amountSignMode === 'signed'
-                              ? (t.type === 'income' ? '+' : t.type === 'transfer' ? '' : '-')
-                              : (t.type === 'income' ? '+' : '')}
+                              ? (isIncome ? '+' : t.type === 'transfer' ? '' : '-')
+                              : (isIncome ? '+' : '')}
                             {t.amount.toLocaleString('ko-KR')}원
                           </span>
                         </td>
 
-                        {/* 결제수단 (Payment Method) - md+ screens */}
-                        <td className="py-2 sm:py-2.5 px-1.5 text-slate-600 whitespace-nowrap text-[11px] font-medium hidden md:table-cell align-middle">
-                          {t.paymentMethod || '-'}
-                        </td>
-
-                        {/* 관리 (Actions) */}
-                        <td className="py-2 sm:py-2.5 px-0.5 sm:px-1 text-center whitespace-nowrap align-middle">
+                        {/* 관리 (Actions) - 깔끔한 알약 형태 툴바로 정돈하여 겹침 방지 */}
+                        <td className="py-2 sm:py-2.5 px-1 text-center whitespace-nowrap align-middle">
                           <div
-                            className="flex items-center justify-center gap-0.5 sm:gap-1"
+                            className="inline-flex items-center gap-0.5 bg-slate-100/90 hover:bg-slate-100 p-0.5 rounded-lg border border-slate-200 shadow-2xs"
                             onClick={(e) => e.stopPropagation()}
                           >
                             <button
                               type="button"
                               onClick={() => handleOpenCopyModal(t)}
-                              className="p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition cursor-pointer"
+                              className="p-1 text-slate-500 hover:text-indigo-600 hover:bg-white rounded transition cursor-pointer"
                               title="내역 복사 & 붙여넣기"
                             >
                               <Copy className="w-3.5 h-3.5" />
@@ -2760,7 +2784,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             <button
                               type="button"
                               onClick={() => handleOpenEditModal(t)}
-                              className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded transition cursor-pointer"
+                              className="p-1 text-slate-500 hover:text-blue-600 hover:bg-white rounded transition cursor-pointer"
                               title="수정"
                             >
                               <Edit2 className="w-3.5 h-3.5" />
@@ -2768,7 +2792,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             <button
                               type="button"
                               onClick={() => setSubItemModalTx(t)}
-                              className="hidden sm:inline-flex p-1 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded transition cursor-pointer"
+                              className="hidden sm:inline-flex p-1 text-slate-500 hover:text-indigo-600 hover:bg-white rounded transition cursor-pointer"
                               title="품목별 세부내역 / 분할 관리"
                             >
                               <Layers className="w-3.5 h-3.5" />
@@ -2776,7 +2800,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             <button
                               type="button"
                               onClick={() => setDeleteModalTx(t)}
-                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition cursor-pointer"
+                              className="p-1 text-slate-500 hover:text-rose-600 hover:bg-white rounded transition cursor-pointer"
                               title="삭제"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
