@@ -44,6 +44,7 @@ import {
   UsageFrequencyStats,
 } from '../services/categoryManager';
 import { evaluateMathFormula, containsFormula, sanitizeFormulaInput } from '../utils/mathFormula';
+import { getPaymentGroupBadge } from '../utils/paymentGroupUtils';
 
 interface ExpenseInputFormProps {
   analysis: SheetAnalysisResult;
@@ -1440,23 +1441,36 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                   const stat = paymentStatsMap.get(pm);
                   const displayCount = stat?.displayCount || 0;
                   const label = stat?.displayLabel || undefined;
+                  const badge = getPaymentGroupBadge(pm);
+                  const isSelected = paymentMethod === pm;
                   return (
                     <button
                       key={pm}
                       type="button"
                       onClick={() => setPaymentMethod(pm)}
-                      className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center gap-1 whitespace-nowrap ${
-                        paymentMethod === pm
+                      className={`px-2.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
+                        isSelected
                           ? 'bg-indigo-600 text-white shadow-sm'
                           : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
                       }`}
-                      title={label}
+                      title={label || `${badge?.group || '결제수단'}`}
                     >
+                      {badge && (
+                        <span
+                          className={`w-3.5 h-3.5 text-[9px] font-black rounded flex items-center justify-center shrink-0 ${
+                            isSelected
+                              ? 'bg-white/20 text-white border border-white/30'
+                              : `${badge.colorClass}`
+                          }`}
+                        >
+                          {badge.char}
+                        </span>
+                      )}
                       <span>{pm}</span>
                       {displayCount > 0 && (
                         <span
                           className={`text-[9px] font-bold px-1 rounded-sm ${
-                            paymentMethod === pm ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-500'
+                            isSelected ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-500'
                           }`}
                         >
                           {displayCount}

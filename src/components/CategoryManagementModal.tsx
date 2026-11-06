@@ -22,7 +22,8 @@ import {
   CheckCircle2,
   FileText,
 } from 'lucide-react';
-import { CategoryItem, PaymentMethodItem, TransactionType } from '../types/ledger';
+import { CategoryItem, PaymentMethodItem, PaymentMethodGroup, TransactionType } from '../types/ledger';
+import { getPaymentGroupBadge, getPaymentMethodGroup, ALL_PAYMENT_GROUPS } from '../utils/paymentGroupUtils';
 import {
   findSettingsTab,
   syncCategoriesToGoogleSheet,
@@ -75,6 +76,8 @@ export const CategoryManagementModal: React.FC<CategoryManagementModalProps> = (
   const [activeTab, setActiveTab] = useState<'expense' | 'income' | 'payment'>('expense');
   const [searchQuery, setSearchQuery] = useState('');
   const [newItemName, setNewItemName] = useState('');
+  const [selectedPaymentGroup, setSelectedPaymentGroup] = useState<'all' | PaymentMethodGroup>('all');
+  const [newPaymentGroup, setNewPaymentGroup] = useState<PaymentMethodGroup>('신용카드');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState('');
   const [isSyncingToSheet, setIsSyncingToSheet] = useState(false);
@@ -219,9 +222,15 @@ export const CategoryManagementModal: React.FC<CategoryManagementModalProps> = (
       c.name.toLowerCase().includes(searchQuery.trim().toLowerCase())
   );
 
-  const filteredPayments = paymentMethods.filter((p) =>
-    p.name.toLowerCase().includes(searchQuery.trim().toLowerCase())
-  );
+  const filteredPayments = paymentMethods.filter((p) => {
+    const matchesSearch = p.name.toLowerCase().includes(searchQuery.trim().toLowerCase());
+    if (!matchesSearch) return false;
+    if (selectedPaymentGroup !== 'all') {
+      const grp = p.group || getPaymentMethodGroup(p.name);
+      return grp === selectedPaymentGroup;
+    }
+    return true;
+  });
 
   // Toggle Category Visibility (Show/Hide)
   const handleToggleCategoryVisibility = (id: string) => {
@@ -255,6 +264,7 @@ export const CategoryManagementModal: React.FC<CategoryManagementModalProps> = (
         name: trimmed,
         isVisible: true,
         isCustom: true,
+        group: newPaymentGroup,
       };
       onUpdatePaymentMethods([...paymentMethods, newMethod]);
     } else {
@@ -573,27 +583,99 @@ export const CategoryManagementModal: React.FC<CategoryManagementModalProps> = (
           </div>
 
           {/* Add Item Form */}
-          <form onSubmit={handleAddItem} className="flex gap-2">
-            <input
-              type="text"
-              placeholder={
-                activeTab === 'payment'
-                  ? '새 결제수단 입력 (예: 토스페이, 애플페이)...'
-                  : '새 카테고리 분류 입력 (예: 반려동물, 배달음식)...'
-              }
-              value={newItemName}
-              onChange={(e) => setNewItemName(e.target.value)}
-              className="flex-1 px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-semibold text-slate-900 focus:outline-none focus:border-blue-600 focus:bg-white"
-            />
-            <button
-              type="submit"
-              disabled={!newItemName.trim()}
-              className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-xl text-xs font-bold transition flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
-            >
-              <Plus className="w-4 h-4" />
-              <span>추가</span>
-            </button>
-          </form>
+          <div className="space-y-1.5">
+            <form onSubmit={handleAddItem} className="flex gap-2">
+              <input
+                type="text"
+                placeholder={
+                  activeTab === 'payment'
+                    ? '새 결제수단 입력 (예: 현대카드, 신한체크, 카카오페이)...'
+                    : '새 카테고리 분류 입력 (예: 반려동물, 배달음식)...'
+                }
+                value={newItemName}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setNewItemName(val);
+                  if (activeTab === 'payment' && val.trim()) {
+                    setNewPaymentGroup(getPaymentMethodGroup(val));
+                  }
+                }}
+                className="flex-1 px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-semibold text-slate-900 focus:outline-none focus:border-blue-600 focus:bg-white"
+              />
+              <button
+                type="submit"
+                disabled={!newItemName.trim()}
+                className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-xl text-xs font-bold transition flex items-center gap-1 shrink-0 cursor-pointer shadow-xs"
+              >
+                <Plus className="w-4 h-4" />
+                <span>추가</span>
+              </button>
+            </form>
+
+            {/* When adding payment method, show group selector pills */}
+            {activeTab === 'payment' && (
+              <div className="flex items-center gap-1.5 flex-wrap text-xs px-1">
+                <span className="text-[11px] font-bold text-slate-500">결제 구분:</span>
+                {ALL_PAYMENT_GROUPS.map((grp) => (
+                  <button
+                    key={grp.group}
+                    type="button"
+                    onClick={() => setNewPaymentGroup(grp.group)}
+                    className={`px-2 py-0.5 rounded-lg text-xs font-bold border transition cursor-pointer flex items-center gap-1 ${
+                      newPaymentGroup === grp.group
+                        ? 'bg-indigo-600 text-white border-indigo-700 shadow-2xs'
+                        : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span className="w-3.5 h-3.5 text-[9px] font-black rounded flex items-center justify-center bg-white/20">
+                      {grp.char}
+                    </span>
+                    <span>{grp.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Group Filter Tabs for Payment Methods */}
+          {activeTab === 'payment' && (
+            <div className="flex items-center gap-1 flex-wrap p-2 bg-slate-100/80 rounded-xl border border-slate-200 text-xs">
+              <span className="text-[11px] font-black text-slate-600 mr-1">분류별 보기:</span>
+              <button
+                type="button"
+                onClick={() => setSelectedPaymentGroup('all')}
+                className={`px-2 py-0.5 rounded-md text-[11px] font-bold border transition cursor-pointer ${
+                  selectedPaymentGroup === 'all'
+                    ? 'bg-indigo-600 text-white border-indigo-700 shadow-2xs'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                전체 ({paymentMethods.length})
+              </button>
+              {ALL_PAYMENT_GROUPS.map((grp) => {
+                const count = paymentMethods.filter(
+                  (p) => (p.group || getPaymentMethodGroup(p.name)) === grp.group
+                ).length;
+                return (
+                  <button
+                    key={grp.group}
+                    type="button"
+                    onClick={() => setSelectedPaymentGroup(grp.group)}
+                    className={`px-2 py-0.5 rounded-md text-[11px] font-bold border transition cursor-pointer flex items-center gap-1 ${
+                      selectedPaymentGroup === grp.group
+                        ? 'bg-indigo-100 text-indigo-950 border-indigo-300 ring-1 ring-indigo-400'
+                        : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span className="w-3.5 h-3.5 text-[9px] font-black rounded flex items-center justify-center bg-indigo-200/70">
+                      {grp.char}
+                    </span>
+                    <span>{grp.label} ({count})</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {/* Quick Visibility Controls & Search Bar */}
           <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-1">
@@ -633,65 +715,100 @@ export const CategoryManagementModal: React.FC<CategoryManagementModalProps> = (
                   결제 수단이 없습니다.
                 </div>
               ) : (
-                filteredPayments.map((item) => (
-                  <div
-                    key={item.id}
-                    className="p-2.5 sm:p-3 flex items-center justify-between gap-2 hover:bg-slate-50 transition"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                      <CreditCard className="w-4 h-4 text-indigo-500 shrink-0" />
-                      {editingId === item.id ? (
-                        <div className="flex items-center gap-1.5 flex-1">
-                          <input
-                            type="text"
-                            value={editingName}
-                            onChange={(e) => setEditingName(e.target.value)}
-                            className="px-2 py-1 bg-white border border-blue-400 rounded-lg text-xs font-bold text-slate-900 w-full"
-                            autoFocus
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleSaveEdit(item.id)}
-                            className="p-1 rounded bg-blue-600 text-white cursor-pointer"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      ) : (
-                        <span
-                          className={`text-xs sm:text-sm font-bold truncate ${
-                            item.isVisible ? 'text-slate-900' : 'text-slate-400 line-through'
-                          }`}
-                        >
-                          {item.name}
-                        </span>
-                      )}
-                    </div>
+                filteredPayments.map((item) => {
+                  const payBadge = getPaymentGroupBadge(item.name, item.group);
 
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {/* Show / Hide Toggle Button */}
-                      <button
-                        type="button"
-                        onClick={() => handleTogglePaymentVisibility(item.id)}
-                        className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
-                          item.isVisible
-                            ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
-                            : 'bg-slate-100 text-slate-400 hover:bg-slate-200 border border-slate-200'
-                        }`}
-                        title={item.isVisible ? '클릭 시 입력창에서 숨김' : '클릭 시 입력창에 노출'}
-                      >
-                        {item.isVisible ? (
-                          <>
-                            <Eye className="w-3 h-3 text-blue-600" />
-                            <span>보임</span>
-                          </>
-                        ) : (
-                          <>
-                            <EyeOff className="w-3 h-3 text-slate-400" />
-                            <span>숨김</span>
-                          </>
+                  return (
+                    <div
+                      key={item.id}
+                      className="p-2.5 sm:p-3 flex items-center justify-between gap-2 hover:bg-slate-50 transition"
+                    >
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
+                        {payBadge && (
+                          <span
+                            className={`w-5 h-5 min-w-[20px] text-[10px] font-black rounded flex items-center justify-center border shrink-0 ${payBadge.colorClass}`}
+                            title={`결제 구분: ${payBadge.label}`}
+                          >
+                            {payBadge.char}
+                          </span>
                         )}
-                      </button>
+                        {editingId === item.id ? (
+                          <div className="flex items-center gap-1.5 flex-1">
+                            <input
+                              type="text"
+                              value={editingName}
+                              onChange={(e) => setEditingName(e.target.value)}
+                              className="px-2 py-1 bg-white border border-blue-400 rounded-lg text-xs font-bold text-slate-900 w-full"
+                              autoFocus
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleSaveEdit(item.id)}
+                              className="p-1 rounded bg-blue-600 text-white cursor-pointer"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span
+                              className={`text-xs sm:text-sm font-bold truncate ${
+                                item.isVisible ? 'text-slate-900' : 'text-slate-400 line-through'
+                              }`}
+                            >
+                              {item.name}
+                            </span>
+                            <span className="text-[11px] text-slate-400 font-medium shrink-0">
+                              ({payBadge?.label || '기타'})
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {/* Group Selection Dropdown */}
+                        <select
+                          value={item.group || getPaymentMethodGroup(item.name)}
+                          onChange={(e) => {
+                            const newGrp = e.target.value as PaymentMethodGroup;
+                            const updated = paymentMethods.map((p) =>
+                              p.id === item.id ? { ...p, group: newGrp } : p
+                            );
+                            onUpdatePaymentMethods(updated);
+                          }}
+                          className="text-[11px] font-bold px-2 py-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 cursor-pointer"
+                          title="결제수단 대분류 변경 (신용카드, 체크카드, 현금, 페이 등)"
+                        >
+                          <option value="신용카드">신용카드 [신]</option>
+                          <option value="체크카드">체크카드 [체]</option>
+                          <option value="현금">현금/이체 [현]</option>
+                          <option value="페이">페이/간편결제 [페]</option>
+                          <option value="기타">기타 [기]</option>
+                        </select>
+
+                        {/* Show / Hide Toggle Button */}
+                        <button
+                          type="button"
+                          onClick={() => handleTogglePaymentVisibility(item.id)}
+                          className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                            item.isVisible
+                              ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
+                              : 'bg-slate-100 text-slate-400 hover:bg-slate-200 border border-slate-200'
+                          }`}
+                          title={item.isVisible ? '클릭 시 입력창에서 숨김' : '클릭 시 입력창에 노출'}
+                        >
+                          {item.isVisible ? (
+                            <>
+                              <Eye className="w-3 h-3 text-blue-600" />
+                              <span>보임</span>
+                            </>
+                          ) : (
+                            <>
+                              <EyeOff className="w-3 h-3 text-slate-400" />
+                              <span>숨김</span>
+                            </>
+                          )}
+                        </button>
 
                       {/* Rename Button */}
                       <button
@@ -714,9 +831,9 @@ export const CategoryManagementModal: React.FC<CategoryManagementModalProps> = (
                       </button>
                     </div>
                   </div>
-                ))
-              )
-            ) : filteredCategories.length === 0 ? (
+                );
+              })
+            )) : filteredCategories.length === 0 ? (
               <div className="p-6 text-center text-xs text-slate-400">
                 카테고리가 없습니다.
               </div>

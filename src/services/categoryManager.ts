@@ -1,6 +1,7 @@
 import {
   CategoryItem,
   PaymentMethodItem,
+  PaymentMethodGroup,
   DEFAULT_EXPENSE_CATEGORIES,
   DEFAULT_INCOME_CATEGORIES,
   DEFAULT_TRANSFER_CATEGORIES,
@@ -8,6 +9,7 @@ import {
   TransactionType,
   Transaction,
 } from '../types/ledger';
+import { getPaymentMethodGroup } from '../utils/paymentGroupUtils';
 
 const STORAGE_KEY_CATEGORIES = 'smart_money_custom_categories_v1';
 const STORAGE_KEY_PAYMENTS = 'smart_money_custom_payments_v1';
@@ -686,8 +688,13 @@ export function parseCategoriesFromSheetRows(rows: string[][]): {
     if (payCol !== -1 && row[payCol]) {
       const v = String(row[payCol]).trim();
       if (v && !v.startsWith('//') && !v.startsWith('#')) {
-        const canonical = canonicalizePaymentMethod(v);
-        if (canonical) paySet.add(canonical);
+        // Check if row is a group header like [신용카드], [체크카드], [현금], [페이]
+        if (v.startsWith('[') && v.endsWith(']')) {
+          // Keep track of header if needed
+        } else {
+          const canonical = canonicalizePaymentMethod(v);
+          if (canonical) paySet.add(canonical);
+        }
       }
     }
   }
@@ -739,6 +746,7 @@ export function parseCategoriesFromSheetRows(rows: string[][]): {
       name,
       isVisible: true,
       isCustom: !DEFAULT_PAYMENT_METHODS.includes(name),
+      group: getPaymentMethodGroup(name),
     });
   });
 
@@ -747,6 +755,7 @@ export function parseCategoriesFromSheetRows(rows: string[][]): {
 
 /**
  * Format categories and payment methods into a 2D array for writing to Google Sheets
+ * Grouping payment methods cleanly under categories ([신용카드], [체크카드], [현금/이체], [페이/간편결제], [기타])
  */
 export function serializeCategoriesToSheetRows(
   categories: CategoryItem[],
@@ -755,9 +764,32 @@ export function serializeCategoriesToSheetRows(
   const expList = categories.filter((c) => c.type === 'expense').map((c) => c.name);
   const incList = categories.filter((c) => c.type === 'income').map((c) => c.name);
   const trList = categories.filter((c) => c.type === 'transfer').map((c) => c.name);
-  const payList = paymentMethods.map((p) => p.name);
 
-  const maxRows = Math.max(expList.length, incList.length, trList.length, payList.length);
+  // Group payment methods by category for clear readability in Google Sheets / Excel
+  const creditCards = paymentMethods.filter((p) => getPaymentMethodGroup(p.name, p.group) === '신용카드').map((p) => p.name);
+  const debitCards = paymentMethods.filter((p) => getPaymentMethodGroup(p.name, p.group) === '체크카드').map((p) => p.name);
+  const cashList = paymentMethods.filter((p) => getPaymentMethodGroup(p.name, p.group) === '현금').map((p) => p.name);
+  const payList = paymentMethods.filter((p) => getPaymentMethodGroup(p.name, p.group) === '페이').map((p) => p.name);
+  const otherList = paymentMethods.filter((p) => getPaymentMethodGroup(p.name, p.group) === '기타').map((p) => p.name);
+
+  const formattedPaymentList: string[] = [];
+  if (creditCards.length > 0) {
+    formattedPaymentList.push('[신용카드]', ...creditCards);
+  }
+  if (debitCards.length > 0) {
+    formattedPaymentList.push('[체크카드]', ...debitCards);
+  }
+  if (cashList.length > 0) {
+    formattedPaymentList.push('[현금/이체]', ...cashList);
+  }
+  if (payList.length > 0) {
+    formattedPaymentList.push('[페이/간편결제]', ...payList);
+  }
+  if (otherList.length > 0) {
+    formattedPaymentList.push('[기타]', ...otherList);
+  }
+
+  const maxRows = Math.max(expList.length, incList.length, trList.length, formattedPaymentList.length);
   const rows: string[][] = [
     ['지출 카테고리', '수입 카테고리', '이체 카테고리', '결제 수단'],
   ];
@@ -767,7 +799,7 @@ export function serializeCategoriesToSheetRows(
       expList[i] || '',
       incList[i] || '',
       trList[i] || '',
-      payList[i] || '',
+      formattedPaymentList[i] || '',
     ]);
   }
 

@@ -63,6 +63,7 @@ import {
   UsageFrequencyStats,
 } from '../services/categoryManager';
 import { evaluateMathFormula, containsFormula, sanitizeFormulaInput } from '../utils/mathFormula';
+import { getPaymentGroupBadge } from '../utils/paymentGroupUtils';
 
 interface DashboardProps {
   transactions: Transaction[];
@@ -2357,6 +2358,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 <span className="text-sm shrink-0">
                                   {isTxSpecial ? '🛋️' : isTxRecurring ? '📌' : '🛒'}
                                 </span>
+                                {/* 결제수단 한 글자 배지 (신/체/현/페/기) */}
+                                {(() => {
+                                  const payBadge = getPaymentGroupBadge(t.paymentMethod);
+                                  if (!payBadge) return null;
+                                  return (
+                                    <span
+                                      className={`w-4.5 h-4.5 min-w-[18px] text-[10px] font-black rounded flex items-center justify-center shrink-0 border cursor-help shadow-2xs ${payBadge.colorClass}`}
+                                      title={`결제수단: ${t.paymentMethod} (${payBadge.label})`}
+                                    >
+                                      {payBadge.char}
+                                    </span>
+                                  );
+                                })()}
                                 <span
                                   className={`font-black text-xs sm:text-sm truncate min-w-0 flex-1 ${
                                     isTxSpecial
@@ -2386,15 +2400,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   {t.category}
                                 </span>
                               </div>
-                              {/* Sub-line: Payment Method */}
-                              {t.paymentMethod && (
-                                <div className="flex items-center gap-1 mt-0.5">
-                                  <span className="inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-semibold text-blue-900 bg-blue-200/80 border border-blue-300">
-                                    <CreditCard className="w-2.5 h-2.5 text-blue-700" />
-                                    <span>{t.paymentMethod}</span>
-                                  </span>
-                                </div>
-                              )}
                             </td>
 
                             {/* 금액 (묶음 전체 총액) */}
@@ -2675,6 +2680,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         {/* 내용 / 사용처 (Description) */}
                         <td className="py-2 sm:py-2.5 px-1.5 sm:px-2.5 min-w-0 align-middle">
                           <div className="flex items-center gap-1.5 min-w-0">
+                            {/* 결제수단 한 글자 배지 (신/체/현/페/기) - 행 높이 늘림 없이 한 줄에 컴팩트하게 표시 */}
+                            {(() => {
+                              const payBadge = getPaymentGroupBadge(t.paymentMethod);
+                              if (!payBadge) return null;
+                              return (
+                                <span
+                                  className={`w-4.5 h-4.5 min-w-[18px] text-[10px] font-black rounded flex items-center justify-center shrink-0 border cursor-help shadow-2xs ${payBadge.colorClass}`}
+                                  title={`결제수단: ${t.paymentMethod} (${payBadge.label})`}
+                                >
+                                  {payBadge.char}
+                                </span>
+                              );
+                            })()}
+
                             <span
                               className={`font-bold sm:font-black text-xs sm:text-sm truncate min-w-0 flex-1 ${
                                 isIncome
@@ -2724,27 +2743,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
                             )}
                           </div>
 
-                          {/* 결제수단 및 메모: 줄 아래 깔끔하게 인라인 태그로 결합하여 오른쪽 관리 버튼과의 충돌 원천 차단 */}
-                          {(t.paymentMethod || t.memo) && (
-                            <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
-                              {t.paymentMethod && (
-                                <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded text-[10px] font-semibold border ${
-                                  isIncome
-                                    ? 'bg-emerald-100/80 text-emerald-800 border-emerald-200'
-                                    : 'bg-slate-100 text-slate-600 border-slate-200'
-                                }`}>
-                                  <CreditCard className={`w-2.5 h-2.5 ${isIncome ? 'text-emerald-600' : 'text-slate-400'}`} />
-                                  <span>{t.paymentMethod}</span>
-                                </span>
-                              )}
-                              {t.memo && (
-                                <span
-                                  className="text-[10px] text-slate-400 truncate max-w-xs"
-                                  title={t.memo}
-                                >
-                                  {t.memo}
-                                </span>
-                              )}
+                          {/* 메모가 있을 때만 깔끔하게 보조 표시 (결제수단은 상단 1글자 배지로 승격) */}
+                          {t.memo && (
+                            <div
+                              className="hidden sm:block text-[10px] text-slate-400 truncate max-w-xs mt-0.5"
+                              title={t.memo}
+                            >
+                              {t.memo}
                             </div>
                           )}
                         </td>
@@ -3609,23 +3614,36 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     const stat = paymentStatsMap.get(pm);
                     const displayCount = stat?.displayCount || 0;
                     const label = stat?.displayLabel || undefined;
+                    const badge = getPaymentGroupBadge(pm);
+                    const isSelected = editForm.paymentMethod === pm;
                     return (
                       <button
                         key={pm}
                         type="button"
                         onClick={() => setEditForm({ ...editForm, paymentMethod: pm })}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer whitespace-nowrap flex items-center gap-1 ${
-                          editForm.paymentMethod === pm
+                        className={`px-2.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                          isSelected
                             ? 'bg-indigo-600 text-white shadow-sm'
                             : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
                         }`}
-                        title={label}
+                        title={label || `${badge?.group || '결제수단'}`}
                       >
+                        {badge && (
+                          <span
+                            className={`w-3.5 h-3.5 text-[9px] font-black rounded flex items-center justify-center shrink-0 ${
+                              isSelected
+                                ? 'bg-white/20 text-white border border-white/30'
+                                : `${badge.colorClass}`
+                            }`}
+                          >
+                            {badge.char}
+                          </span>
+                        )}
                         <span>{pm}</span>
                         {displayCount > 0 && (
                           <span
                             className={`text-[9px] font-bold px-1 rounded-sm ${
-                              editForm.paymentMethod === pm ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-500'
+                              isSelected ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-500'
                             }`}
                           >
                             {displayCount}
@@ -4102,8 +4120,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                           <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-400">
                             {item.tx.paymentMethod && (
-                              <span className="text-slate-600 font-medium">
-                                {item.tx.paymentMethod}
+                              <span className="inline-flex items-center gap-1 text-slate-700 font-semibold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                {(() => {
+                                  const b = getPaymentGroupBadge(item.tx.paymentMethod);
+                                  if (!b) return null;
+                                  return (
+                                    <span className={`w-3.5 h-3.5 text-[9px] font-black rounded flex items-center justify-center shrink-0 ${b.colorClass}`}>
+                                      {b.char}
+                                    </span>
+                                  );
+                                })()}
+                                <span>{item.tx.paymentMethod}</span>
                               </span>
                             )}
                             {item.tx.memo && (
@@ -4292,8 +4319,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                           <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-400">
                             {item.tx.paymentMethod && (
-                              <span className="text-slate-600 font-medium">
-                                {item.tx.paymentMethod}
+                              <span className="inline-flex items-center gap-1 text-slate-700 font-semibold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                {(() => {
+                                  const b = getPaymentGroupBadge(item.tx.paymentMethod);
+                                  if (!b) return null;
+                                  return (
+                                    <span className={`w-3.5 h-3.5 text-[9px] font-black rounded flex items-center justify-center shrink-0 ${b.colorClass}`}>
+                                      {b.char}
+                                    </span>
+                                  );
+                                })()}
+                                <span>{item.tx.paymentMethod}</span>
                               </span>
                             )}
                             {item.tx.memo && (

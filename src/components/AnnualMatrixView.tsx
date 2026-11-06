@@ -35,6 +35,7 @@ import {
   formatShortDate,
 } from '../types/ledger';
 import { saveSubItemsForTransaction } from '../services/subItemStorage';
+import { getPaymentGroupBadge } from '../utils/paymentGroupUtils';
 
 interface AnnualMatrixViewProps {
   yearData?: YearDashboardData;
@@ -1253,6 +1254,18 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
                             <span className="font-mono text-slate-500 text-[11px] font-bold">
                               {formatShortDate(item.tx.date)}
                             </span>
+                            {item.tx.paymentMethod && (() => {
+                              const badge = getPaymentGroupBadge(item.tx.paymentMethod);
+                              if (!badge) return null;
+                              return (
+                                <span
+                                  className={`inline-flex items-center justify-center w-4 h-4 text-[9px] font-black rounded ${badge.badgeBg} ${badge.badgeText} border ${badge.badgeBorder} shrink-0`}
+                                  title={`결제수단: ${item.tx.paymentMethod} (${badge.label})`}
+                                >
+                                  {badge.char}
+                                </span>
+                              );
+                            })()}
                             {item.isSubItem ? (
                               <div className="flex items-center gap-1.5 min-w-0">
                                 <span className="text-[10px] text-blue-700 bg-blue-50 px-1.5 py-0.2 rounded font-bold border border-blue-200">
@@ -1278,12 +1291,20 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
                           </div>
 
                           <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-400 flex-wrap">
-                            {item.tx.paymentMethod && (
-                              <span className="inline-flex items-center gap-0.5 text-slate-600 font-medium bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200">
-                                <CreditCard className="w-2.5 h-2.5 text-slate-400" />
-                                <span>{item.tx.paymentMethod}</span>
-                              </span>
-                            )}
+                            {item.tx.paymentMethod && (() => {
+                              const badge = getPaymentGroupBadge(item.tx.paymentMethod);
+                              return (
+                                <span className="inline-flex items-center gap-1 text-slate-700 font-semibold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                                  {badge && (
+                                    <span className={`w-3.5 h-3.5 text-[9px] font-black rounded flex items-center justify-center shrink-0 ${badge.colorClass}`}>
+                                      {badge.char}
+                                    </span>
+                                  )}
+                                  <span>{item.tx.paymentMethod}</span>
+                                  {badge && <span className="text-[10px] text-slate-400">({badge.label})</span>}
+                                </span>
+                              );
+                            })()}
                             {item.tx.memo && (
                               <span className="truncate max-w-[220px] text-slate-500" title={item.tx.memo}>
                                 {item.tx.memo}
@@ -1500,20 +1521,36 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
                   <span>결제 수단</span>
                 </label>
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  {allPaymentMethodNames.slice(0, 8).map((pm) => (
-                    <button
-                      key={pm}
-                      type="button"
-                      onClick={() => setEditForm((prev) => ({ ...prev, paymentMethod: pm }))}
-                      className={`px-2.5 py-1 rounded-xl text-xs font-bold border transition cursor-pointer ${
-                        editForm.paymentMethod === pm
-                          ? 'bg-indigo-600 text-white border-indigo-700 shadow-2xs'
-                          : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
-                      }`}
-                    >
-                      {pm}
-                    </button>
-                  ))}
+                  {allPaymentMethodNames.slice(0, 10).map((pm) => {
+                    const badge = getPaymentGroupBadge(pm);
+                    const isSelected = editForm.paymentMethod === pm;
+                    return (
+                      <button
+                        key={pm}
+                        type="button"
+                        onClick={() => setEditForm((prev) => ({ ...prev, paymentMethod: pm }))}
+                        className={`px-2.5 py-1 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center gap-1.5 ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white border-indigo-700 shadow-2xs'
+                            : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                        }`}
+                        title={badge ? `${badge.group}` : undefined}
+                      >
+                        {badge && (
+                          <span
+                            className={`w-3.5 h-3.5 text-[9px] font-black rounded flex items-center justify-center shrink-0 ${
+                              isSelected
+                                ? 'bg-white/20 text-white border border-white/30'
+                                : `${badge.colorClass}`
+                            }`}
+                          >
+                            {badge.char}
+                          </span>
+                        )}
+                        <span>{pm}</span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
