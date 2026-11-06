@@ -774,13 +774,27 @@ export default function App() {
 
     // Real Google Mode with active accessToken or Apps Script Web App: Write directly to Google Sheets immediately!
     try {
-      await appendTransactionRow(
+      if (newTx.subItems && newTx.subItems.length > 0) {
+        saveSubItemsForTransaction(
+          { ...newTx, sheetTitle: targetSheetTitle },
+          newTx.subItems
+        );
+      }
+
+      const appendRes = await appendTransactionRow(
         spreadsheetId,
         targetSheetTitle,
         analysis.mapping,
         newTx,
         accessToken
       );
+
+      if (newTx.subItems && newTx.subItems.length > 0 && appendRes?.rowIndex) {
+        saveSubItemsForTransaction(
+          { ...newTx, id: `${targetSheetTitle}-r${appendRes.rowIndex}`, sheetTitle: targetSheetTitle },
+          newTx.subItems
+        );
+      }
 
       // Successfully synced: clear from pending queue if present
       setPendingSyncList((prev) => {
@@ -815,13 +829,25 @@ export default function App() {
             const loginRes = await googleSignIn();
             if (loginRes?.accessToken) {
               setAccessToken(loginRes.accessToken);
-              await appendTransactionRow(
+              if (newTx.subItems && newTx.subItems.length > 0) {
+                saveSubItemsForTransaction(
+                  { ...newTx, sheetTitle: targetSheetTitle },
+                  newTx.subItems
+                );
+              }
+              const retryRes = await appendTransactionRow(
                 spreadsheetId,
                 targetSheetTitle,
                 analysis.mapping,
                 newTx,
                 loginRes.accessToken
               );
+              if (newTx.subItems && newTx.subItems.length > 0 && retryRes?.rowIndex) {
+                saveSubItemsForTransaction(
+                  { ...newTx, id: `${targetSheetTitle}-r${retryRes.rowIndex}`, sheetTitle: targetSheetTitle },
+                  newTx.subItems
+                );
+              }
               setSyncToast({
                 show: true,
                 type: 'success',

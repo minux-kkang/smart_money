@@ -7,6 +7,20 @@ interface StoredSubItemsMap {
 }
 
 /**
+ * Generate stable content signature based on business attributes (date, description, amount)
+ */
+export function getContentSignature(tx: {
+  date?: string;
+  description?: string;
+  amount?: number;
+}): string {
+  const d = tx.date || '';
+  const desc = (tx.description || '').trim();
+  const amt = tx.amount || 0;
+  return `${d}_${desc}_${amt}`;
+}
+
+/**
  * Generate stable signature for a transaction to recover sub-items across sheet reload
  */
 export function getTransactionSignature(tx: {
@@ -18,10 +32,7 @@ export function getTransactionSignature(tx: {
   if (tx.id && !tx.id.startsWith('local-')) {
     return tx.id;
   }
-  const d = tx.date || '';
-  const desc = (tx.description || '').trim();
-  const amt = tx.amount || 0;
-  return `${d}_${desc}_${amt}`;
+  return getContentSignature(tx);
 }
 
 /**
@@ -50,21 +61,24 @@ export function saveAllSubItems(map: StoredSubItemsMap): void {
 }
 
 /**
- * Save sub-items for a specific transaction
+ * Save sub-items for a specific transaction (supports ID, content signature, and tab signature)
  */
 export function saveSubItemsForTransaction(
-  tx: { id: string; date?: string; description?: string; amount?: number },
+  tx: { id?: string; date?: string; description?: string; amount?: number; sheetTitle?: string },
   subItems: SubItem[]
 ): void {
   const map = loadAllSubItems();
-  const sig = getTransactionSignature(tx);
+  const contentSig = getContentSignature(tx);
+  const tabSig = tx.sheetTitle && contentSig ? `${tx.sheetTitle}_${contentSig}` : null;
 
   if (!subItems || subItems.length === 0) {
-    delete map[tx.id];
-    delete map[sig];
+    if (tx.id) delete map[tx.id];
+    if (contentSig) delete map[contentSig];
+    if (tabSig) delete map[tabSig];
   } else {
-    map[tx.id] = subItems;
-    map[sig] = subItems;
+    if (tx.id) map[tx.id] = subItems;
+    if (contentSig) map[contentSig] = subItems;
+    if (tabSig) map[tabSig] = subItems;
   }
 
   saveAllSubItems(map);
@@ -208,7 +222,7 @@ export function parseSubItemsFromMemo(memo?: string): SubItem[] {
   // If text was not bracketed, check if it looks like sub-item content
   // (e.g. contains '|', newlines, or patterns like "X원", numbers with item names)
   if (!bracketMatch) {
-    const hasPricePattern = /[0-9,]+\s*원|[0-9]{1,3}(?:,[0-9]{3})+/.test(targetText);
+    const hasPricePattern = /[0-9,]+\s*원|[0-9]{1,3}(?:,[0-9]{3})+|\b[0-9]{3,}\b/.test(targetText);
     const hasSeparator = /[|\n;]/.test(targetText);
     if (!hasPricePattern && !hasSeparator) {
       return [];
@@ -296,21 +310,40 @@ export function getSubItemsForTransaction(
 
   const map = cachedMap || loadAllSubItems();
 
-  // Try direct ID match
+  // 1. Try direct ID match
   if (tx.id && map[tx.id] && map[tx.id].length > 0) {
     return map[tx.id];
   }
 
-  // Try signature match
+  // 2. Try Tab + Content Signature match e.g. "11월_2026-11-06_이마트_50000"
+  const contentSig = getContentSignature(tx);
+  if (tx.sheetTitle && contentSig) {
+    const tabSig = `${tx.sheetTitle}_${contentSig}`;
+    if (map[tabSig] && map[tabSig].length > 0) {
+      if (tx.id) map[tx.id] = map[tabSig];
+      return map[tabSig];
+    }
+  }
+
+  // 3. Try pure Content Signature match e.g. "2026-11-06_이마트_50000"
+  if (contentSig && map[contentSig] && map[contentSig].length > 0) {
+    if (tx.id) map[tx.id] = map[contentSig];
+    return map[contentSig];
+  }
+
+  // 4. Try legacy signature match
   const sig = getTransactionSignature(tx);
-  if (map[sig] && map[sig].length > 0) {
+  if (sig && map[sig] && map[sig].length > 0) {
+    if (tx.id) map[tx.id] = map[sig];
     return map[sig];
   }
 
-  // Try memo parsing
+  // 5. Try memo parsing
   if (tx.memo) {
     const fromMemo = parseSubItemsFromMemo(tx.memo);
     if (fromMemo.length > 0) {
+      if (tx.id) map[tx.id] = fromMemo;
+      if (contentSig) map[contentSig] = fromMemo;
       return fromMemo;
     }
   }
@@ -323,8 +356,15 @@ export function getSubItemsForTransaction(
  */
 export function enrichTransactionsWithSubItems(transactions: Transaction[]): Transaction[] {
   const map = loadAllSubItems();
-  return transactions.map((tx) => {
+  let mapUpdated = false;
+
+  const enriched = transactions.map((tx) => {
     const subItems = getSubItemsForTransaction(tx, map);
+    if (tx.id && subItems.length > 0 && !map[tx.id]) {
+      map[tx.id] = subItems;
+      mapUpdated = true;
+    }
+
     const isRecurring =
       tx.isRecurring !== undefined
         ? tx.isRecurring
@@ -351,4 +391,10 @@ export function enrichTransactionsWithSubItems(transactions: Transaction[]): Tra
       isSpecial,
     };
   });
+
+  if (mapUpdated) {
+    saveAllSubItems(map);
+  }
+
+  return enriched;
 }

@@ -78,7 +78,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
 }) => {
   const [type, setType] = useState<TransactionType>('expense');
   const [amountStr, setAmountStr] = useState<string>('');
-  const [splitSubItemsIntoSeparateTx, setSplitSubItemsIntoSeparateTx] = useState<boolean>(true);
+  const [splitSubItemsIntoSeparateTx, setSplitSubItemsIntoSeparateTx] = useState<boolean>(false);
   const [date, setDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [description, setDescription] = useState<string>('');
   const [category, setCategory] = useState<string>('');
@@ -717,6 +717,18 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
           finalMemo = finalMemo
             ? (finalMemo.includes('[특별지출]') ? finalMemo : `[특별지출] ${finalMemo}`)
             : '[특별지출]';
+        }
+
+        if (validSubItems.length > 0) {
+          saveSubItemsForTransaction(
+            {
+              date,
+              description: description.trim(),
+              amount: numAmount,
+              sheetTitle: targetMonth,
+            },
+            validSubItems
+          );
         }
 
         await onAddTransaction({
@@ -1720,12 +1732,12 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                       onChange={(e) => setSplitSubItemsIntoSeparateTx(e.target.checked)}
                       className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
                     />
-                    <span>세부 품목들을 개별 내역으로 각각 분할 등록 (권장)</span>
+                    <span>세부 품목들을 개별 거래 내역으로 각각 분할 등록</span>
                   </label>
                   <p className="text-[10.5px] text-blue-700 pl-6 leading-tight">
                     {splitSubItemsIntoSeparateTx
-                      ? '✓ 각 품목의 카테고리(식비, 생활용품 등)로 개별 저장되며, 남은 금액은 기존 사용처(쿠팡/마트) 잔여로 유지됩니다.'
-                      : '○ 분할하지 않고 1개 거래의 메모란에 품목들을 묶어서 기록합니다.'}
+                      ? '✓ 각 품목(식비, 생활용품 등)이 독립된 거래 내역으로 각각 등록되며, 남은 금액은 잔여 내역으로 남깁니다.'
+                      : '✓ 기본값: 1건의 지출 내역(총액) 안에 세부 품목 목록을 온전히 묶어서 보관합니다. (카드 청구서 1건과 1:1 일치)'}
                   </p>
                 </div>
               )}
