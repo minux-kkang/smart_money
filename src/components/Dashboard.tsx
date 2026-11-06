@@ -2210,11 +2210,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <table className="w-full table-fixed text-left text-xs border-collapse">
                 <colgroup>
                   {isSelectionMode && <col className="w-7 sm:w-8" />}
-                  <col className="w-12 sm:w-14" />
+                  <col className="w-11 sm:w-14" />
                   <col className="hidden sm:table-column sm:w-18 md:w-22" />
                   <col className="w-auto" />
-                  <col className="w-24 sm:w-28 md:w-32" />
-                  <col className="w-22 sm:w-24 md:w-28" />
+                  <col className="w-20 sm:w-28 md:w-32" />
+                  <col className="hidden sm:table-column sm:w-22 md:w-26" />
                 </colgroup>
                 <thead>
                   <tr className="bg-slate-100 text-slate-700 border-y-2 border-slate-200 font-black">
@@ -2279,7 +2279,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         )}
                       </div>
                     </th>
-                    <th className="py-2 sm:py-2.5 px-1 text-center whitespace-nowrap">관리</th>
+                    <th className="py-2 sm:py-2.5 px-1 text-center whitespace-nowrap hidden sm:table-cell">관리</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
@@ -2354,64 +2354,76 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                             {/* 내용 / 사용처: 원래 항목 이름(쿠팡, 마트 등)을 1회만 큼직하게 표기 */}
                             <td className="py-2 sm:py-2.5 px-1.5 sm:px-2.5 min-w-0 align-middle">
-                              <div className="flex items-center gap-1.5 min-w-0">
-                                <span className="text-sm shrink-0">
-                                  {isTxSpecial ? '🛋️' : isTxRecurring ? '📌' : '🛒'}
-                                </span>
-                                {/* 결제수단 한 글자 배지 (신/체/현/페/기) */}
-                                {(() => {
-                                  const payBadge = getPaymentGroupBadge(t.paymentMethod);
-                                  if (!payBadge) return null;
-                                  return (
-                                    <span
-                                      className={`w-4.5 h-4.5 min-w-[18px] text-[10px] font-black rounded flex items-center justify-center shrink-0 border cursor-help shadow-2xs ${payBadge.colorClass}`}
-                                      title={`결제수단: ${t.paymentMethod} (${payBadge.label})`}
-                                    >
-                                      {payBadge.char}
-                                    </span>
-                                  );
-                                })()}
-                                <span
-                                  className={`font-black text-xs sm:text-sm truncate min-w-0 flex-1 ${
-                                    isTxSpecial
-                                      ? 'text-amber-800 font-black'
-                                      : isTxRecurring
-                                      ? 'text-purple-700 font-black'
-                                      : 'text-blue-950'
-                                  }`}
-                                  title={
-                                    isTxSpecial
-                                      ? `${t.description} (특별·비정기 지출)`
-                                      : isTxRecurring
-                                      ? `${t.description} (고정 지출)`
-                                      : t.description
-                                  }
-                                >
-                                  {t.description}
-                                </span>
-                                <span
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setSelectedCategoryDetail(t.category);
-                                  }}
-                                  className="sm:hidden text-[9px] font-bold text-blue-900 px-1 py-0.2 rounded bg-blue-200 border border-blue-300 shrink-0 whitespace-nowrap hover:bg-blue-300 transition cursor-pointer"
-                                  title="클릭하여 이 카테고리 내역 모아보기"
-                                >
-                                  {t.category}
-                                </span>
+                              <div className="flex flex-col justify-center min-w-0">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                  <span className="text-sm shrink-0">
+                                    {isTxSpecial ? '🛋️' : isTxRecurring ? '📌' : '🛒'}
+                                  </span>
+                                  {/* 결제수단 한 글자 배지 (신/체/현/페/기) */}
+                                  {(() => {
+                                    const payBadge = getPaymentGroupBadge(t.paymentMethod);
+                                    if (!payBadge) return null;
+                                    return (
+                                      <span
+                                        className={`w-4.5 h-4.5 min-w-[18px] text-[10px] font-black rounded flex items-center justify-center shrink-0 border cursor-help shadow-2xs ${payBadge.colorClass}`}
+                                        title={`결제수단: ${t.paymentMethod} (${payBadge.label})`}
+                                      >
+                                        {payBadge.char}
+                                      </span>
+                                    );
+                                  })()}
+                                  <span
+                                    className={`font-black text-xs sm:text-sm truncate min-w-0 flex-1 ${
+                                      isTxSpecial
+                                        ? 'text-amber-800 font-black'
+                                        : isTxRecurring
+                                        ? 'text-purple-700 font-black'
+                                        : 'text-blue-950'
+                                    }`}
+                                    title={
+                                      isTxSpecial
+                                        ? `${t.description} (특별·비정기 지출)`
+                                        : isTxRecurring
+                                        ? `${t.description} (고정 지출)`
+                                        : t.description
+                                    }
+                                  >
+                                    {t.description}
+                                  </span>
+                                </div>
+
+                                {/* 모바일 보조 라인: 분류 태그 & 묶음 세부 품목 개수 */}
+                                <div className="sm:hidden flex items-center gap-1.5 mt-0.5 text-[10px] text-blue-900">
+                                  <span
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedCategoryDetail(t.category);
+                                    }}
+                                    className="font-bold text-blue-900 px-1.5 py-0.2 rounded bg-blue-200/90 border border-blue-300 shrink-0 whitespace-nowrap hover:bg-blue-300 transition cursor-pointer"
+                                    title="클릭하여 이 카테고리 내역 모아보기"
+                                  >
+                                    {t.category}
+                                  </span>
+                                  <span className="text-[10px] font-bold text-blue-700/80">
+                                    세부품목 {t.subItems.length}개
+                                  </span>
+                                </div>
                               </div>
                             </td>
 
                             {/* 금액 (묶음 전체 총액) */}
-                            <td className="py-2 sm:py-2.5 px-1 sm:px-2 pr-2.5 sm:pr-3 text-right whitespace-nowrap align-middle">
-                              <span className="font-black text-xs sm:text-sm tracking-tight text-blue-950">
-                                {amountSignMode === 'signed' ? '-' : ''}
-                                {t.amount.toLocaleString('ko-KR')}원
-                              </span>
+                            <td className="py-2 sm:py-2.5 px-1 sm:px-2 pr-2 sm:pr-3 text-right whitespace-nowrap align-middle">
+                              <div className="inline-flex items-center gap-1 justify-end">
+                                <span className="font-black text-xs sm:text-sm tracking-tight text-blue-950">
+                                  {amountSignMode === 'signed' ? '-' : ''}
+                                  {t.amount.toLocaleString('ko-KR')}원
+                                </span>
+                                <ChevronRight className="w-3.5 h-3.5 text-blue-400 sm:hidden shrink-0" />
+                              </div>
                             </td>
 
-                            {/* 관리 */}
-                            <td className="py-2 sm:py-2.5 px-1 text-center whitespace-nowrap align-middle">
+                            {/* 관리 (Desktop Only) */}
+                            <td className="py-2 sm:py-2.5 px-1 text-center whitespace-nowrap align-middle hidden sm:table-cell">
                               <div
                                 className="inline-flex items-center gap-0.5 bg-blue-200/80 p-0.5 rounded-lg border border-blue-300 shadow-2xs"
                                 onClick={(e) => e.stopPropagation()}
@@ -2486,55 +2498,62 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                                 {/* 세부 품목명 (쿠팡 등 반복 태그 없이 전체 너비 사용) */}
                                 <td className="py-2 px-1.5 sm:px-2.5 min-w-0 align-middle">
-                                  <div className="flex items-center gap-1.5 min-w-0">
-                                    <span className="text-blue-500 font-bold text-xs shrink-0">↳</span>
-                                    <span
-                                      className="font-bold text-slate-800 text-xs sm:text-sm truncate min-w-0 flex-1"
-                                      title={
-                                        sub.quantity && sub.quantity > 1 && sub.unitPrice
-                                          ? `${sub.name} (${sub.quantity}개, 개당 ${sub.unitPrice.toLocaleString('ko-KR')}원)`
-                                          : sub.name
-                                      }
-                                    >
-                                      {sub.name}
-                                    </span>
-                                    {sub.quantity && sub.quantity > 1 ? (
+                                  <div className="flex flex-col justify-center min-w-0">
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      <span className="text-blue-500 font-bold text-xs shrink-0">↳</span>
                                       <span
-                                        className="text-[10px] font-black text-blue-700 bg-blue-100/80 border border-blue-200 px-1.5 py-0.2 rounded shrink-0 whitespace-nowrap"
+                                        className="font-bold text-slate-800 text-xs sm:text-sm truncate min-w-0 flex-1"
                                         title={
-                                          sub.unitPrice
-                                            ? `개당 ${sub.unitPrice.toLocaleString('ko-KR')}원`
-                                            : undefined
+                                          sub.quantity && sub.quantity > 1 && sub.unitPrice
+                                            ? `${sub.name} (${sub.quantity}개, 개당 ${sub.unitPrice.toLocaleString('ko-KR')}원)`
+                                            : sub.name
                                         }
                                       >
-                                        {sub.quantity}개
+                                        {sub.name}
                                       </span>
-                                    ) : null}
-                                    {/* 모바일 분류 태그 */}
-                                    <span
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        setSelectedCategoryDetail(sub.category || t.category);
-                                      }}
-                                      className="sm:hidden text-[9px] font-semibold text-slate-500 px-1 py-0.2 rounded bg-slate-100 border border-slate-200 shrink-0 whitespace-nowrap hover:bg-blue-100 hover:text-blue-800 transition cursor-pointer"
-                                      title="클릭하여 이 카테고리 내역 모아보기"
-                                    >
-                                      {sub.category || t.category}
-                                    </span>
+                                      {sub.quantity && sub.quantity > 1 ? (
+                                        <span
+                                          className="text-[10px] font-black text-blue-700 bg-blue-100/80 border border-blue-200 px-1.5 py-0.2 rounded shrink-0 whitespace-nowrap"
+                                          title={
+                                            sub.unitPrice
+                                              ? `개당 ${sub.unitPrice.toLocaleString('ko-KR')}원`
+                                              : undefined
+                                          }
+                                        >
+                                          {sub.quantity}개
+                                        </span>
+                                      ) : null}
+                                    </div>
+
+                                    {/* 모바일 분류 태그 (보조 라인으로 이동하여 품목명이 잘리지 않게 함) */}
+                                    <div className="sm:hidden flex items-center gap-1.5 mt-0.5 text-[10px] text-slate-500">
+                                      <span
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setSelectedCategoryDetail(sub.category || t.category);
+                                        }}
+                                        className="font-semibold text-slate-600 px-1.5 py-0.2 rounded bg-slate-100 border border-slate-200 shrink-0 whitespace-nowrap hover:bg-blue-100 hover:text-blue-800 transition cursor-pointer"
+                                        title="클릭하여 이 카테고리 내역 모아보기"
+                                      >
+                                        {sub.category || t.category}
+                                      </span>
+                                    </div>
                                   </div>
                                 </td>
 
-
                                 {/* 세부 품목 금액 */}
                                 <td className="py-2 px-1 sm:px-2 pr-2.5 sm:pr-3 text-right whitespace-nowrap align-middle">
-                                  <span className="font-bold text-xs sm:text-sm tracking-tight text-slate-800">
-                                    {amountSignMode === 'signed' ? '-' : ''}
-                                    {sub.amount.toLocaleString('ko-KR')}원
-                                  </span>
+                                  <div className="inline-flex items-center gap-1 justify-end">
+                                    <span className="font-bold text-xs sm:text-sm tracking-tight text-slate-800">
+                                      {amountSignMode === 'signed' ? '-' : ''}
+                                      {sub.amount.toLocaleString('ko-KR')}원
+                                    </span>
+                                    <ChevronRight className="w-3.5 h-3.5 text-slate-300 sm:hidden shrink-0" />
+                                  </div>
                                 </td>
 
-                                {/* 관리 */}
-                                <td className="py-2 px-1 text-center whitespace-nowrap align-middle">
+                                {/* 관리 (Desktop Only) */}
+                                <td className="py-2 px-1 text-center whitespace-nowrap align-middle hidden sm:table-cell">
                                   <div
                                     className="inline-flex items-center gap-0.5 bg-blue-100/80 p-0.5 rounded-lg border border-blue-200 shadow-2xs"
                                     onClick={(e) => e.stopPropagation()}
@@ -2582,12 +2601,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                 </div>
                               </td>
                               <td className="py-2 px-1 sm:px-2 pr-2.5 sm:pr-3 text-right whitespace-nowrap align-middle">
-                                <span className="font-bold text-xs sm:text-sm tracking-tight text-amber-900">
-                                  {amountSignMode === 'signed' ? '-' : ''}
-                                  {remainder.toLocaleString('ko-KR')}원
-                                </span>
+                                <div className="inline-flex items-center gap-1 justify-end">
+                                  <span className="font-bold text-xs sm:text-sm tracking-tight text-amber-900">
+                                    {amountSignMode === 'signed' ? '-' : ''}
+                                    {remainder.toLocaleString('ko-KR')}원
+                                  </span>
+                                  <ChevronRight className="w-3.5 h-3.5 text-amber-400 sm:hidden shrink-0" />
+                                </div>
                               </td>
-                              <td className="py-2 px-1 text-center whitespace-nowrap align-middle">
+                              <td className="py-2 px-1 text-center whitespace-nowrap align-middle hidden sm:table-cell">
                                 <div
                                   className="inline-flex items-center gap-0.5 bg-amber-100/90 p-0.5 rounded-lg border border-amber-300 shadow-2xs"
                                   onClick={(e) => e.stopPropagation()}
@@ -2679,101 +2701,115 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                         {/* 내용 / 사용처 (Description) */}
                         <td className="py-2 sm:py-2.5 px-1.5 sm:px-2.5 min-w-0 align-middle">
-                          <div className="flex items-center gap-1.5 min-w-0">
-                            {/* 결제수단 한 글자 배지 (신/체/현/페/기) - 행 높이 늘림 없이 한 줄에 컴팩트하게 표시 */}
-                            {(() => {
-                              const payBadge = getPaymentGroupBadge(t.paymentMethod);
-                              if (!payBadge) return null;
-                              return (
-                                <span
-                                  className={`w-4.5 h-4.5 min-w-[18px] text-[10px] font-black rounded flex items-center justify-center shrink-0 border cursor-help shadow-2xs ${payBadge.colorClass}`}
-                                  title={`결제수단: ${t.paymentMethod} (${payBadge.label})`}
-                                >
-                                  {payBadge.char}
-                                </span>
-                              );
-                            })()}
+                          <div className="flex flex-col justify-center min-w-0">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              {/* 결제수단 한 글자 배지 (신/체/현/페/기) */}
+                              {(() => {
+                                const payBadge = getPaymentGroupBadge(t.paymentMethod);
+                                if (!payBadge) return null;
+                                return (
+                                  <span
+                                    className={`w-4.5 h-4.5 min-w-[18px] text-[10px] font-black rounded flex items-center justify-center shrink-0 border cursor-help shadow-2xs ${payBadge.colorClass}`}
+                                    title={`결제수단: ${t.paymentMethod} (${payBadge.label})`}
+                                  >
+                                    {payBadge.char}
+                                  </span>
+                                );
+                              })()}
 
-                            <span
-                              className={`font-bold sm:font-black text-xs sm:text-sm truncate min-w-0 flex-1 ${
-                                isIncome
-                                  ? 'text-emerald-950 font-black'
-                                  : isTxSpecial
-                                  ? 'text-amber-800 font-black'
-                                  : isTxRecurring
-                                  ? 'text-purple-700 font-black'
-                                  : 'text-slate-900'
-                              }`}
-                              title={
-                                isIncome
-                                  ? `${t.description} (입금 / 수입)`
-                                  : isTxSpecial
-                                  ? `${t.description} (특별·비정기 지출)`
-                                  : isTxRecurring
-                                  ? `${t.description} (고정 지출)`
-                                  : t.description
-                              }
-                            >
-                              {t.description}
-                            </span>
-                            {/* On mobile, show category tag right next to description */}
-                            <span
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedCategoryDetail(t.category);
-                              }}
-                              className={`sm:hidden text-[9px] font-bold px-1 py-0.2 rounded border shrink-0 whitespace-nowrap transition cursor-pointer ${
-                                isIncome
-                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                                  : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-blue-100 hover:text-blue-800'
-                              }`}
-                              title="클릭하여 이 카테고리 내역 모아보기"
-                            >
-                              {t.category}
-                            </span>
-                            {t.createdAt && t.createdAt > Date.now() - 600000 && (
-                              <span className="text-[9px] font-black text-blue-700 bg-blue-100 px-1.5 py-0.2 rounded border border-blue-300 shrink-0 whitespace-nowrap">
-                                최신
+                              <span
+                                className={`font-bold sm:font-black text-xs sm:text-sm truncate min-w-0 flex-1 ${
+                                  isIncome
+                                    ? 'text-emerald-950 font-black'
+                                    : isTxSpecial
+                                    ? 'text-amber-800 font-black'
+                                    : isTxRecurring
+                                    ? 'text-purple-700 font-black'
+                                    : 'text-slate-900'
+                                }`}
+                                title={
+                                  isIncome
+                                    ? `${t.description} (입금 / 수입)`
+                                    : isTxSpecial
+                                    ? `${t.description} (특별·비정기 지출)`
+                                    : isTxRecurring
+                                    ? `${t.description} (고정 지출)`
+                                    : t.description
+                                }
+                              >
+                                {t.description}
                               </span>
-                            )}
-                            {isIncome && (
-                              <span className="text-[9px] font-black text-emerald-800 bg-emerald-100 px-1.5 py-0.2 rounded border border-emerald-300 shrink-0 whitespace-nowrap">
-                                입금
+
+                              {t.createdAt && t.createdAt > Date.now() - 600000 && (
+                                <span className="text-[9px] font-black text-blue-700 bg-blue-100 px-1 py-0.2 rounded border border-blue-300 shrink-0 whitespace-nowrap">
+                                  최신
+                                </span>
+                              )}
+                              {isIncome && (
+                                <span className="text-[9px] font-black text-emerald-800 bg-emerald-100 px-1 py-0.2 rounded border border-emerald-300 shrink-0 whitespace-nowrap">
+                                  입금
+                                </span>
+                              )}
+                            </div>
+
+                            {/* 모바일 보조 라인: 분류 태그 & 메모 */}
+                            <div className="sm:hidden flex items-center gap-1.5 mt-0.5 text-[10px] text-slate-500">
+                              <span
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedCategoryDetail(t.category);
+                                }}
+                                className={`font-semibold px-1.5 py-0.2 rounded border shrink-0 whitespace-nowrap transition cursor-pointer ${
+                                  isIncome
+                                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                    : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-blue-100 hover:text-blue-800'
+                                }`}
+                                title="클릭하여 이 카테고리 내역 모아보기"
+                              >
+                                {t.category}
                               </span>
+                              {t.memo && (
+                                <span className="truncate max-w-[160px] text-slate-400" title={t.memo}>
+                                  {t.memo}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* 데스크탑 메모 (데스크탑은 분류 컬럼이 별도로 표시되므로 메모만 표기) */}
+                            {t.memo && (
+                              <div
+                                className="hidden sm:block text-[10px] text-slate-400 truncate max-w-xs mt-0.5"
+                                title={t.memo}
+                              >
+                                {t.memo}
+                              </div>
                             )}
                           </div>
-
-                          {/* 메모가 있을 때만 깔끔하게 보조 표시 (결제수단은 상단 1글자 배지로 승격) */}
-                          {t.memo && (
-                            <div
-                              className="hidden sm:block text-[10px] text-slate-400 truncate max-w-xs mt-0.5"
-                              title={t.memo}
-                            >
-                              {t.memo}
-                            </div>
-                          )}
                         </td>
 
                         {/* 금액 (Amount) */}
-                        <td className="py-2 sm:py-2.5 px-1 sm:px-2 pr-2.5 sm:pr-3 text-right whitespace-nowrap align-middle">
-                          <span
-                            className={`font-black text-xs sm:text-sm tracking-tight ${
-                              isIncome
-                                ? 'text-emerald-600 font-black'
-                                : t.type === 'transfer'
-                                ? 'text-sky-600'
-                                : 'text-slate-900'
-                            }`}
-                          >
-                            {amountSignMode === 'signed'
-                              ? (isIncome ? '+' : t.type === 'transfer' ? '' : '-')
-                              : (isIncome ? '+' : '')}
-                            {t.amount.toLocaleString('ko-KR')}원
-                          </span>
+                        <td className="py-2 sm:py-2.5 px-1 sm:px-2 pr-2 sm:pr-3 text-right whitespace-nowrap align-middle">
+                          <div className="inline-flex items-center gap-1 justify-end">
+                            <span
+                              className={`font-black text-xs sm:text-sm tracking-tight ${
+                                isIncome
+                                  ? 'text-emerald-600 font-black'
+                                  : t.type === 'transfer'
+                                  ? 'text-sky-600'
+                                  : 'text-slate-900'
+                              }`}
+                            >
+                              {amountSignMode === 'signed'
+                                ? (isIncome ? '+' : t.type === 'transfer' ? '' : '-')
+                                : (isIncome ? '+' : '')}
+                              {t.amount.toLocaleString('ko-KR')}원
+                            </span>
+                            <ChevronRight className="w-3.5 h-3.5 text-slate-300 sm:hidden shrink-0" />
+                          </div>
                         </td>
 
-                        {/* 관리 (Actions) - 깔끔한 알약 형태 툴바로 정돈하여 겹침 방지 */}
-                        <td className="py-2 sm:py-2.5 px-1 text-center whitespace-nowrap align-middle">
+                        {/* 관리 (Actions) - Desktop Only */}
+                        <td className="py-2 sm:py-2.5 px-1 text-center whitespace-nowrap align-middle hidden sm:table-cell">
                           <div
                             className="inline-flex items-center gap-0.5 bg-slate-100/90 hover:bg-slate-100 p-0.5 rounded-lg border border-slate-200 shadow-2xs"
                             onClick={(e) => e.stopPropagation()}
@@ -3918,14 +3954,48 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
             {/* Modal Actions */}
             <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
-              <button
-                type="button"
-                disabled={isSubmittingEdit}
-                onClick={() => setEditModalTx(null)}
-                className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 cursor-pointer"
-              >
-                취소
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={isSubmittingEdit}
+                  onClick={() => setEditModalTx(null)}
+                  className="px-3.5 py-2.5 rounded-xl text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 cursor-pointer"
+                >
+                  닫기
+                </button>
+                {editModalTx && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={isSubmittingEdit}
+                      onClick={() => {
+                        const tx = editModalTx;
+                        setEditModalTx(null);
+                        handleOpenCopyModal(tx);
+                      }}
+                      className="px-3 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 cursor-pointer flex items-center gap-1"
+                      title="이 내역 복사하기"
+                    >
+                      <Copy className="w-3.5 h-3.5 text-slate-500" />
+                      <span>복사</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSubmittingEdit}
+                      onClick={() => {
+                        const tx = editModalTx;
+                        setEditModalTx(null);
+                        setDeleteModalTx(tx);
+                      }}
+                      className="px-3 py-2.5 rounded-xl text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer flex items-center gap-1"
+                      title="이 내역 삭제하기"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                      <span>삭제</span>
+                    </button>
+                  </>
+                )}
+              </div>
               <div className="flex items-center gap-2 flex-wrap">
                 {editSubItems.filter((s) => s.name.trim().length > 0 || (Number(s.amount) || 0) > 0).length > 0 && (
                   <button
