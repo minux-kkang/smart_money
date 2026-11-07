@@ -70,6 +70,7 @@ import {
   enrichTransactionsWithSubItems,
   saveSubItemsForTransaction,
 } from './services/subItemStorage';
+import { registerPaymentMethods } from './utils/paymentGroupUtils';
 import {
   FileSpreadsheet,
   BarChart3,
@@ -133,6 +134,11 @@ export default function App() {
       return next;
     });
   }, []);
+
+  useEffect(() => {
+    registerPaymentMethods(customPaymentMethods);
+  }, [customPaymentMethods]);
+
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState<boolean>(false);
   const [isDomainAuthModalOpen, setIsDomainAuthModalOpen] = useState<boolean>(false);
 

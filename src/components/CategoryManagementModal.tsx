@@ -597,7 +597,8 @@ export const CategoryManagementModal: React.FC<CategoryManagementModalProps> = (
                   const val = e.target.value;
                   setNewItemName(val);
                   if (activeTab === 'payment' && val.trim()) {
-                    setNewPaymentGroup(getPaymentMethodGroup(val));
+                    const detected = getPaymentMethodGroup(val);
+                    if (detected) setNewPaymentGroup(detected);
                   }
                 }}
                 className="flex-1 px-3.5 py-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs sm:text-sm font-semibold text-slate-900 focus:outline-none focus:border-blue-600 focus:bg-white"
@@ -783,7 +784,7 @@ export const CategoryManagementModal: React.FC<CategoryManagementModalProps> = (
                           <option value="체크카드">체크카드 [체]</option>
                           <option value="현금">현금/이체 [현]</option>
                           <option value="페이">페이/간편결제 [페]</option>
-                          <option value="기타">기타 [기]</option>
+                          <option value="포인트">포인트/상품권 [포]</option>
                         </select>
 
                         {/* Show / Hide Toggle Button */}

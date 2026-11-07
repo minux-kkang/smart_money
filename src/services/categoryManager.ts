@@ -9,7 +9,7 @@ import {
   TransactionType,
   Transaction,
 } from '../types/ledger';
-import { getPaymentMethodGroup } from '../utils/paymentGroupUtils';
+import { getPaymentMethodGroup, registerPaymentMethods, cleanPaymentMethodName } from '../utils/paymentGroupUtils';
 
 const STORAGE_KEY_CATEGORIES = 'smart_money_custom_categories_v1';
 const STORAGE_KEY_PAYMENTS = 'smart_money_custom_payments_v1';
@@ -370,6 +370,7 @@ export function saveCategories(categories: CategoryItem[]): void {
 export function savePaymentMethods(methods: PaymentMethodItem[]): void {
   try {
     localStorage.setItem(STORAGE_KEY_PAYMENTS, JSON.stringify(methods));
+    registerPaymentMethods(methods);
   } catch (e) {
     console.warn('Failed to save payments to localStorage:', e);
   }
@@ -667,7 +668,8 @@ export function parseCategoriesFromSheetRows(rows: string[][]): {
   const expSet = new Set<string>();
   const incSet = new Set<string>();
   const trSet = new Set<string>();
-  const paySet = new Set<string>();
+  const paymentMap = new Map<string, PaymentMethodGroup>();
+  let currentGroup: PaymentMethodGroup | undefined = undefined;
 
   for (let r = headerRowIdx + 1; r < rows.length; r++) {
     const row = rows[r];
@@ -686,20 +688,34 @@ export function parseCategoriesFromSheetRows(rows: string[][]): {
       if (v && !v.startsWith('//') && !v.startsWith('#')) trSet.add(v);
     }
     if (payCol !== -1 && row[payCol]) {
-      const v = String(row[payCol]).trim();
-      if (v && !v.startsWith('//') && !v.startsWith('#')) {
-        // Check if row is a group header like [신용카드], [체크카드], [현금], [페이]
-        if (v.startsWith('[') && v.endsWith(']')) {
-          // Keep track of header if needed
+      const rawVal = String(row[payCol]).trim();
+      if (rawVal && !rawVal.startsWith('//') && !rawVal.startsWith('#')) {
+        const cleanHeader = rawVal.replace(/[\[\]]/g, '').trim().toLowerCase();
+        // Check if row is a group header like [신용카드], [체크카드], [현금], [페이], [포인트]
+        if (cleanHeader.includes('신용') || cleanHeader === '신') {
+          currentGroup = '신용카드';
+        } else if (cleanHeader.includes('체크') || cleanHeader === '체') {
+          currentGroup = '체크카드';
+        } else if (cleanHeader.includes('현금') || cleanHeader.includes('이체') || cleanHeader === '현') {
+          currentGroup = '현금';
+        } else if (cleanHeader.includes('페이') || cleanHeader === '페') {
+          currentGroup = '페이';
+        } else if (cleanHeader.includes('포인트') || cleanHeader.includes('상품권') || cleanHeader === '포' || cleanHeader.includes('기타')) {
+          currentGroup = '포인트';
         } else {
-          const canonical = canonicalizePaymentMethod(v);
-          if (canonical) paySet.add(canonical);
+          // Regular payment item
+          const cleanName = cleanPaymentMethodName(rawVal);
+          const canonical = canonicalizePaymentMethod(cleanName);
+          if (canonical) {
+            const detectedGrp = getPaymentMethodGroup(rawVal) || currentGroup || '신용카드';
+            paymentMap.set(canonical, detectedGrp);
+          }
         }
       }
     }
   }
 
-  if (expSet.size === 0 && incSet.size === 0 && paySet.size === 0) {
+  if (expSet.size === 0 && incSet.size === 0 && paymentMap.size === 0) {
     return null;
   }
 
@@ -740,22 +756,24 @@ export function parseCategoriesFromSheetRows(rows: string[][]): {
   });
 
   const paymentMethods: PaymentMethodItem[] = [];
-  Array.from(paySet).forEach((name) => {
+  paymentMap.forEach((grp, name) => {
     paymentMethods.push({
       id: `sheet_pm_${name}`,
       name,
       isVisible: true,
       isCustom: !DEFAULT_PAYMENT_METHODS.includes(name),
-      group: getPaymentMethodGroup(name),
+      group: grp,
     });
   });
+
+  registerPaymentMethods(paymentMethods);
 
   return { categories, paymentMethods };
 }
 
 /**
  * Format categories and payment methods into a 2D array for writing to Google Sheets
- * Grouping payment methods cleanly under categories ([신용카드], [체크카드], [현금/이체], [페이/간편결제], [기타])
+ * Grouping payment methods cleanly under categories ([신용카드], [체크카드], [현금/이체], [페이/간편결제], [포인트/상품권])
  */
 export function serializeCategoriesToSheetRows(
   categories: CategoryItem[],
@@ -770,7 +788,7 @@ export function serializeCategoriesToSheetRows(
   const debitCards = paymentMethods.filter((p) => getPaymentMethodGroup(p.name, p.group) === '체크카드').map((p) => p.name);
   const cashList = paymentMethods.filter((p) => getPaymentMethodGroup(p.name, p.group) === '현금').map((p) => p.name);
   const payList = paymentMethods.filter((p) => getPaymentMethodGroup(p.name, p.group) === '페이').map((p) => p.name);
-  const otherList = paymentMethods.filter((p) => getPaymentMethodGroup(p.name, p.group) === '기타').map((p) => p.name);
+  const pointList = paymentMethods.filter((p) => getPaymentMethodGroup(p.name, p.group) === '포인트').map((p) => p.name);
 
   const formattedPaymentList: string[] = [];
   if (creditCards.length > 0) {
@@ -785,8 +803,8 @@ export function serializeCategoriesToSheetRows(
   if (payList.length > 0) {
     formattedPaymentList.push('[페이/간편결제]', ...payList);
   }
-  if (otherList.length > 0) {
-    formattedPaymentList.push('[기타]', ...otherList);
+  if (pointList.length > 0) {
+    formattedPaymentList.push('[포인트/상품권]', ...pointList);
   }
 
   const maxRows = Math.max(expList.length, incList.length, trList.length, formattedPaymentList.length);

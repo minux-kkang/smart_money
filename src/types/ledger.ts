@@ -137,11 +137,11 @@ export interface CategoryItem {
   isCustom?: boolean;
 }
 
-export type PaymentMethodGroup = '신용카드' | '체크카드' | '현금' | '페이' | '기타';
+export type PaymentMethodGroup = '신용카드' | '체크카드' | '현금' | '페이' | '포인트' | '기타';
 
 export interface PaymentGroupBadgeInfo {
   group: PaymentMethodGroup;
-  char: '신' | '체' | '현' | '페' | '기';
+  char: '신' | '체' | '현' | '페' | '포' | '기';
   label: string;
   colorClass: string;
   badgeBg: string;
@@ -154,7 +154,7 @@ export interface PaymentMethodItem {
   name: string;
   isVisible: boolean; // 보이기 / 숨기기 (입력창 노출 여부)
   isCustom?: boolean;
-  group?: PaymentMethodGroup; // 결제수단 대분류 (신용카드, 체크카드, 현금, 페이, 기타)
+  group?: PaymentMethodGroup; // 결제수단 대분류 (신용카드, 체크카드, 현금, 페이, 포인트, 기타)
 }
 
 export const DEFAULT_EXPENSE_CATEGORIES: string[] = [

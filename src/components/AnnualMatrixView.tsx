@@ -1254,18 +1254,6 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
                             <span className="font-mono text-slate-500 text-[11px] font-bold">
                               {formatShortDate(item.tx.date)}
                             </span>
-                            {item.tx.paymentMethod && (() => {
-                              const badge = getPaymentGroupBadge(item.tx.paymentMethod);
-                              if (!badge) return null;
-                              return (
-                                <span
-                                  className={`inline-flex items-center justify-center w-4 h-4 text-[9px] font-black rounded ${badge.badgeBg} ${badge.badgeText} border ${badge.badgeBorder} shrink-0`}
-                                  title={`결제수단: ${item.tx.paymentMethod} (${badge.label})`}
-                                >
-                                  {badge.char}
-                                </span>
-                              );
-                            })()}
                             {item.isSubItem ? (
                               <div className="flex items-center gap-1.5 min-w-0">
                                 <span className="text-[10px] text-blue-700 bg-blue-50 px-1.5 py-0.2 rounded font-bold border border-blue-200">
@@ -1313,7 +1301,19 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
                           </div>
                         </div>
 
-                        <div className="text-right shrink-0 flex items-center gap-3">
+                        <div className="text-right shrink-0 flex items-center gap-2.5">
+                          {item.tx.paymentMethod && (() => {
+                            const badge = getPaymentGroupBadge(item.tx.paymentMethod);
+                            if (!badge) return null;
+                            return (
+                              <span
+                                className={`w-4.5 h-4.5 text-[9px] font-black rounded flex items-center justify-center shrink-0 border ${badge.badgeBg} ${badge.badgeText} ${badge.badgeBorder}`}
+                                title={`결제수단: ${item.tx.paymentMethod} (${badge.label})`}
+                              >
+                                {badge.char}
+                              </span>
+                            );
+                          })()}
                           <span className="text-sm font-black text-rose-600">
                             {item.matchedAmount.toLocaleString('ko-KR')}원
                           </span>

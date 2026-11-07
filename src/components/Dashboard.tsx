@@ -2213,7 +2213,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <col className="w-11 sm:w-14" />
                   <col className="hidden sm:table-column sm:w-18 md:w-22" />
                   <col className="w-auto" />
-                  <col className="w-20 sm:w-28 md:w-32" />
+                  <col className="w-24 sm:w-28 md:w-32" />
                   <col className="hidden sm:table-column sm:w-22 md:w-26" />
                 </colgroup>
                 <thead>
@@ -2359,19 +2359,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   <span className="text-sm shrink-0">
                                     {isTxSpecial ? '🛋️' : isTxRecurring ? '📌' : '🛒'}
                                   </span>
-                                  {/* 결제수단 한 글자 배지 (신/체/현/페/기) */}
-                                  {(() => {
-                                    const payBadge = getPaymentGroupBadge(t.paymentMethod);
-                                    if (!payBadge) return null;
-                                    return (
-                                      <span
-                                        className={`w-4.5 h-4.5 min-w-[18px] text-[10px] font-black rounded flex items-center justify-center shrink-0 border cursor-help shadow-2xs ${payBadge.colorClass}`}
-                                        title={`결제수단: ${t.paymentMethod} (${payBadge.label})`}
-                                      >
-                                        {payBadge.char}
-                                      </span>
-                                    );
-                                  })()}
                                   <span
                                     className={`font-black text-xs sm:text-sm truncate min-w-0 flex-1 ${
                                       isTxSpecial
@@ -2411,9 +2398,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
                               </div>
                             </td>
 
-                            {/* 금액 (묶음 전체 총액) */}
-                            <td className="py-2 sm:py-2.5 px-1 sm:px-2 pr-2 sm:pr-3 text-right whitespace-nowrap align-middle">
-                              <div className="inline-flex items-center gap-1 justify-end">
+                            {/* 금액 (묶음 전체 총액) - 결제수단 배지([신]/[체]/[현]/[페]/[포])를 금액 앞에 배치 */}
+                            <td className="py-2 sm:py-2.5 px-1 sm:px-2 pr-2.5 sm:pr-3 text-right whitespace-nowrap align-middle">
+                              <div className="inline-flex items-center gap-1.5 justify-end">
+                                {(() => {
+                                  const payBadge = getPaymentGroupBadge(t.paymentMethod);
+                                  if (!payBadge) return null;
+                                  return (
+                                    <span
+                                      className={`w-4.5 h-4.5 min-w-[18px] text-[10px] font-black rounded flex items-center justify-center shrink-0 border cursor-help shadow-2xs ${payBadge.colorClass}`}
+                                      title={`결제수단: ${t.paymentMethod} (${payBadge.label})`}
+                                    >
+                                      {payBadge.char}
+                                    </span>
+                                  );
+                                })()}
                                 <span className="font-black text-xs sm:text-sm tracking-tight text-blue-950">
                                   {amountSignMode === 'signed' ? '-' : ''}
                                   {t.amount.toLocaleString('ko-KR')}원
@@ -2703,20 +2702,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                         <td className="py-2 sm:py-2.5 px-1.5 sm:px-2.5 min-w-0 align-middle">
                           <div className="flex flex-col justify-center min-w-0">
                             <div className="flex items-center gap-1.5 min-w-0">
-                              {/* 결제수단 한 글자 배지 (신/체/현/페/기) */}
-                              {(() => {
-                                const payBadge = getPaymentGroupBadge(t.paymentMethod);
-                                if (!payBadge) return null;
-                                return (
-                                  <span
-                                    className={`w-4.5 h-4.5 min-w-[18px] text-[10px] font-black rounded flex items-center justify-center shrink-0 border cursor-help shadow-2xs ${payBadge.colorClass}`}
-                                    title={`결제수단: ${t.paymentMethod} (${payBadge.label})`}
-                                  >
-                                    {payBadge.char}
-                                  </span>
-                                );
-                              })()}
-
                               <span
                                 className={`font-bold sm:font-black text-xs sm:text-sm truncate min-w-0 flex-1 ${
                                   isIncome
@@ -2787,9 +2772,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           </div>
                         </td>
 
-                        {/* 금액 (Amount) */}
-                        <td className="py-2 sm:py-2.5 px-1 sm:px-2 pr-2 sm:pr-3 text-right whitespace-nowrap align-middle">
-                          <div className="inline-flex items-center gap-1 justify-end">
+                        {/* 금액 (Amount) - 금액 바로 앞에 [신]/[체]/[현]/[페]/[포] 결제수단 배지 배치 */}
+                        <td className="py-2 sm:py-2.5 px-1 sm:px-2 pr-2.5 sm:pr-3 text-right whitespace-nowrap align-middle">
+                          <div className="inline-flex items-center gap-1.5 justify-end">
+                            {(() => {
+                              const payBadge = getPaymentGroupBadge(t.paymentMethod);
+                              if (!payBadge) return null;
+                              return (
+                                <span
+                                  className={`w-4.5 h-4.5 min-w-[18px] text-[10px] font-black rounded flex items-center justify-center shrink-0 border cursor-help shadow-2xs ${payBadge.colorClass}`}
+                                  title={`결제수단: ${t.paymentMethod} (${payBadge.label})`}
+                                >
+                                  {payBadge.char}
+                                </span>
+                              );
+                            })()}
                             <span
                               className={`font-black text-xs sm:text-sm tracking-tight ${
                                 isIncome

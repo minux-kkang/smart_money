@@ -1,8 +1,8 @@
-import { PaymentMethodGroup, PaymentGroupBadgeInfo } from '../types/ledger';
+import { PaymentMethodGroup, PaymentGroupBadgeInfo, PaymentMethodItem } from '../types/ledger';
 
 export const ALL_PAYMENT_GROUPS: Array<{
   group: PaymentMethodGroup;
-  char: '신' | '체' | '현' | '페' | '기';
+  char: '신' | '체' | '현' | '페' | '포';
   label: string;
   desc: string;
   colorClass: string;
@@ -41,33 +41,99 @@ export const ALL_PAYMENT_GROUPS: Array<{
     dotColor: '#9333EA',
   },
   {
-    group: '기타',
-    char: '기',
-    label: '기타/포인트',
-    desc: '상품권, 포인트, 머니, 기타 결제 수단',
-    colorClass: 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200',
-    dotColor: '#64748B',
+    group: '포인트',
+    char: '포',
+    label: '포인트/상품권',
+    desc: '네이버포인트, 해피머니, 도서상품권, 캐시, 머니, 마일리지 등',
+    colorClass: 'bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-200',
+    dotColor: '#D97706',
   },
 ];
 
+// Global registry for user-defined payment methods (e.g. from Google Sheet '분류설정')
+const registeredMethodMap = new Map<string, PaymentMethodGroup>();
+
+export function registerPaymentMethods(methods?: PaymentMethodItem[]): void {
+  if (!methods || !Array.isArray(methods)) return;
+  methods.forEach((m) => {
+    if (m && m.name && m.group && m.group !== '기타') {
+      registeredMethodMap.set(m.name.trim().toLowerCase(), m.group);
+    }
+  });
+}
+
+/**
+ * Clean payment method name by removing classification brackets/parentheses like (신), [체]
+ */
+export function cleanPaymentMethodName(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/^\[(신|체|현|페|포|신용카드|체크카드|현금|페이|포인트)\]\s*/i, '')
+    .replace(/\s*[\(\[]\s*(신|체|현|페|포|신용카드|체크카드|현금|페이|포인트|신용|체크)\s*[\)\]]$/i, '')
+    .trim();
+}
+
 /**
  * Automatically determine the high-level payment group from payment method name
+ * Checks: 1) explicitGroup, 2) registered sheet classification, 3) explicit suffix/prefix, 4) keywords
  */
 export function getPaymentMethodGroup(
   name?: string,
   explicitGroup?: PaymentMethodGroup
-): PaymentMethodGroup {
-  if (explicitGroup) return explicitGroup;
-  if (!name || !name.trim()) return '기타';
+): PaymentMethodGroup | undefined {
+  if (explicitGroup && explicitGroup !== '기타') return explicitGroup;
+  if (!name || !name.trim() || name.trim() === '-') return undefined;
 
-  const clean = name.trim().toLowerCase();
+  const trimmed = name.trim();
+  const clean = trimmed.toLowerCase();
 
-  // 1. Check for Debit / Check Card first (takes precedence over generic '카드')
-  if (clean.includes('체크') || clean.includes('check')) {
+  // 1. Check user-registered classification from Google Sheet or Category Management
+  const registered = registeredMethodMap.get(clean);
+  if (registered) return registered;
+
+  // 2. Check explicit bracket/parenthesis notation e.g. [신] 현대카드, 현대카드(신), 현대카드[신]
+  if (
+    clean.startsWith('[신]') ||
+    clean.startsWith('[신용]') ||
+    /\s*[\(\[]\s*(신|신용|신용카드)\s*[\)\]]$/i.test(trimmed)
+  ) {
+    return '신용카드';
+  }
+  if (
+    clean.startsWith('[체]') ||
+    clean.startsWith('[체크]') ||
+    /\s*[\(\[]\s*(체|체크|체크카드)\s*[\)\]]$/i.test(trimmed)
+  ) {
+    return '체크카드';
+  }
+  if (
+    clean.startsWith('[현]') ||
+    clean.startsWith('[현금]') ||
+    /\s*[\(\[]\s*(현|현금|이체|계좌)\s*[\)\]]$/i.test(trimmed)
+  ) {
+    return '현금';
+  }
+  if (
+    clean.startsWith('[페]') ||
+    clean.startsWith('[페이]') ||
+    /\s*[\(\[]\s*(페|페이|간편결제)\s*[\)\]]$/i.test(trimmed)
+  ) {
+    return '페이';
+  }
+  if (
+    clean.startsWith('[포]') ||
+    clean.startsWith('[포인트]') ||
+    /\s*[\(\[]\s*(포|포인트|상품권|머니|캐시)\s*[\)\]]$/i.test(trimmed)
+  ) {
+    return '포인트';
+  }
+
+  // 3. Keyword matching: Debit / Check Card (higher precedence than generic '카드')
+  if (clean.includes('체크') || clean.includes('check') || clean.includes('직불')) {
     return '체크카드';
   }
 
-  // 2. Check for Pay / Simple Payment
+  // 4. Keyword matching: Pay / Simple Payment
   if (
     clean.includes('페이') ||
     clean.includes('pay') ||
@@ -85,7 +151,23 @@ export function getPaymentMethodGroup(
     return '페이';
   }
 
-  // 3. Check for Cash / Account Transfer / Auto Debit
+  // 5. Keyword matching: Points / Gift Vouchers / Cash / Money
+  if (
+    clean.includes('포인트') ||
+    clean.includes('point') ||
+    clean.includes('상품권') ||
+    clean.includes('머니') ||
+    clean.includes('캐시') ||
+    clean.includes('쿠폰') ||
+    clean.includes('마일리지') ||
+    clean.includes('해피머니') ||
+    clean.includes('문화상품권') ||
+    clean.includes('도서문화')
+  ) {
+    return '포인트';
+  }
+
+  // 6. Keyword matching: Cash / Account Transfer / Auto Debit
   if (
     clean.includes('현금') ||
     clean.includes('cash') ||
@@ -100,7 +182,7 @@ export function getPaymentMethodGroup(
     return '현금';
   }
 
-  // 4. Check for Credit Card / Banks / Card companies
+  // 7. Keyword matching: Credit Card / Banks / Card companies
   if (
     clean.includes('신용') ||
     clean.includes('credit') ||
@@ -125,11 +207,12 @@ export function getPaymentMethodGroup(
     return '신용카드';
   }
 
-  return '기타';
+  return undefined;
 }
 
 /**
- * Returns single-character badge metadata for a payment method
+ * Returns single-character badge metadata for a payment method ([신], [체], [현], [페], [포])
+ * If unmatched or unknown, returns null so no weird '(기)' badge appears!
  */
 export function getPaymentGroupBadge(
   name?: string,
@@ -138,6 +221,7 @@ export function getPaymentGroupBadge(
   if (!name || !name.trim() || name.trim() === '-') return null;
 
   const group = getPaymentMethodGroup(name, explicitGroup);
+  if (!group || group === '기타') return null;
 
   switch (group) {
     case '신용카드':
@@ -180,15 +264,17 @@ export function getPaymentGroupBadge(
         badgeText: 'text-purple-800',
         badgeBorder: 'border-purple-300',
       };
-    default:
+    case '포인트':
       return {
-        group: '기타',
-        char: '기',
-        label: '기타결제',
-        colorClass: 'bg-slate-100 text-slate-700 border-slate-300 hover:bg-slate-200',
-        badgeBg: 'bg-slate-100',
-        badgeText: 'text-slate-700',
-        badgeBorder: 'border-slate-300',
+        group,
+        char: '포',
+        label: '포인트/상품권',
+        colorClass: 'bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-200',
+        badgeBg: 'bg-amber-100',
+        badgeText: 'text-amber-800',
+        badgeBorder: 'border-amber-300',
       };
+    default:
+      return null;
   }
 }
