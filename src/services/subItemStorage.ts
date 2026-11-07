@@ -1,6 +1,6 @@
 import { SubItem, Transaction } from '../types/ledger';
 
-const STORAGE_KEY = 'smart_money_subitems_store_v1';
+const STORAGE_KEY = 'smart_money_subitems_store_v2';
 
 interface StoredSubItemsMap {
   [key: string]: SubItem[];
@@ -61,24 +61,19 @@ export function saveAllSubItems(map: StoredSubItemsMap): void {
 }
 
 /**
- * Save sub-items for a specific transaction (supports ID, content signature, and tab signature)
+ * Save sub-items for a specific transaction
  */
 export function saveSubItemsForTransaction(
   tx: { id?: string; date?: string; description?: string; amount?: number; sheetTitle?: string },
   subItems: SubItem[]
 ): void {
+  if (!tx.id) return;
   const map = loadAllSubItems();
-  const contentSig = getContentSignature(tx);
-  const tabSig = tx.sheetTitle && contentSig ? `${tx.sheetTitle}_${contentSig}` : null;
 
   if (!subItems || subItems.length === 0) {
-    if (tx.id) delete map[tx.id];
-    if (contentSig) delete map[contentSig];
-    if (tabSig) delete map[tabSig];
+    delete map[tx.id];
   } else {
-    if (tx.id) map[tx.id] = subItems;
-    if (contentSig) map[contentSig] = subItems;
-    if (tabSig) map[tabSig] = subItems;
+    map[tx.id] = subItems;
   }
 
   saveAllSubItems(map);
@@ -298,54 +293,38 @@ export function serializeSubItemsToMemo(
 }
 
 /**
- * Retrieve sub-items for a transaction from storage or memo
+ * Retrieve sub-items for a transaction from memo or storage.
+ * Google Sheet row data is strictly authoritative: if a row from Google Sheets
+ * does not have sub-items in its sub-items column or memo, it will NEVER borrow
+ * sub-items from another row via shifted row indices or content signatures!
  */
 export function getSubItemsForTransaction(
   tx: Transaction,
   cachedMap?: StoredSubItemsMap
 ): SubItem[] {
+  // 1. Authoritative: already parsed from the Google Sheet subItems column
   if (tx.subItems && tx.subItems.length > 0) {
     return tx.subItems;
   }
 
-  const map = cachedMap || loadAllSubItems();
-
-  // 1. Try direct ID match
-  if (tx.id && map[tx.id] && map[tx.id].length > 0) {
-    return map[tx.id];
-  }
-
-  // 2. Try Tab + Content Signature match e.g. "11월_2026-11-06_이마트_50000"
-  const contentSig = getContentSignature(tx);
-  if (tx.sheetTitle && contentSig) {
-    const tabSig = `${tx.sheetTitle}_${contentSig}`;
-    if (map[tabSig] && map[tabSig].length > 0) {
-      if (tx.id) map[tx.id] = map[tabSig];
-      return map[tabSig];
-    }
-  }
-
-  // 3. Try pure Content Signature match e.g. "2026-11-06_이마트_50000"
-  if (contentSig && map[contentSig] && map[contentSig].length > 0) {
-    if (tx.id) map[tx.id] = map[contentSig];
-    return map[contentSig];
-  }
-
-  // 4. Try legacy signature match
-  const sig = getTransactionSignature(tx);
-  if (sig && map[sig] && map[sig].length > 0) {
-    if (tx.id) map[tx.id] = map[sig];
-    return map[sig];
-  }
-
-  // 5. Try memo parsing
+  // 2. Authoritative: parse from transaction's own memo tag if present
   if (tx.memo) {
     const fromMemo = parseSubItemsFromMemo(tx.memo);
     if (fromMemo.length > 0) {
-      if (tx.id) map[tx.id] = fromMemo;
-      if (contentSig) map[contentSig] = fromMemo;
       return fromMemo;
     }
+  }
+
+  // 3. If loaded from Google Sheets (has sheetTitle and rowIndex), the row in Google Sheets
+  // is the single source of truth. If it had no sub-items, do NOT copy from another row!
+  if (tx.sheetTitle && tx.rowIndex && tx.rowIndex >= 2) {
+    return [];
+  }
+
+  // 4. For local/pending unsynced transactions only, check local storage by ID
+  const map = cachedMap || loadAllSubItems();
+  if (tx.id && map[tx.id] && map[tx.id].length > 0) {
+    return map[tx.id];
   }
 
   return [];
@@ -356,14 +335,10 @@ export function getSubItemsForTransaction(
  */
 export function enrichTransactionsWithSubItems(transactions: Transaction[]): Transaction[] {
   const map = loadAllSubItems();
-  let mapUpdated = false;
 
   const enriched = transactions.map((tx) => {
     const subItems = getSubItemsForTransaction(tx, map);
-    if (tx.id && subItems.length > 0 && !map[tx.id]) {
-      map[tx.id] = subItems;
-      mapUpdated = true;
-    }
+
 
     const isRecurring =
       tx.isRecurring !== undefined
@@ -391,10 +366,6 @@ export function enrichTransactionsWithSubItems(transactions: Transaction[]): Tra
       isSpecial,
     };
   });
-
-  if (mapUpdated) {
-    saveAllSubItems(map);
-  }
 
   return enriched;
 }

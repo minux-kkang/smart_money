@@ -19,12 +19,12 @@ import {
   Filter,
   CheckSquare,
   Square,
+  Loader2,
 } from 'lucide-react';
 import {
   USER_2026_DATA,
   YearDashboardData,
   CategoryMonthlyData,
-  generateUserMonthlyTransactions,
 } from '../data/userLedgerData';
 import {
   Transaction,
@@ -41,9 +41,15 @@ interface AnnualMatrixViewProps {
   yearData?: YearDashboardData;
   onSelectMonth?: (monthTitle: string) => void;
   transactions?: Transaction[];
+  activeSheetTitle?: string;
   onEditTransaction?: (tx: Transaction) => Promise<void> | void;
   customCategories?: CategoryItem[];
   customPaymentMethods?: PaymentMethodItem[];
+  spreadsheetId?: string;
+  accessToken?: string | null;
+  sheetTabs?: Array<{ id: number; title: string }>;
+  isRealGoogleConnected?: boolean;
+  onFetchMonthTransactions?: (monthNum: number) => Promise<Transaction[]>;
 }
 
 const CATEGORY_COLOR_PALETTE = [
@@ -121,34 +127,56 @@ interface MatchedMatrixItem {
  * Extract month number (1 ~ 12) from date string or sheet title
  */
 function extractMonthNumber(dateStr?: string, sheetTitle?: string): number | null {
+  if (sheetTitle) {
+    const s1 = sheetTitle.match(/(?:^|[^0-9])(\d{1,2})월/);
+    if (s1) return parseInt(s1[1], 10);
+    const s2 = sheetTitle.match(/\d{2,4}[-_.](\d{1,2})/);
+    if (s2) return parseInt(s2[2], 10);
+    const s3 = sheetTitle.match(/^0?(\d{1,2})$/);
+    if (s3) return parseInt(s3[1], 10);
+  }
   if (dateStr) {
     const m1 = dateStr.match(/^(\d{4})[-./](\d{1,2})/);
     if (m1) return parseInt(m1[2], 10);
-    const m2 = dateStr.match(/(\d{1,2})월/);
+    const m2 = dateStr.match(/(?:^|[^0-9])(\d{1,2})월/);
     if (m2) return parseInt(m2[1], 10);
-    const m3 = dateStr.match(/^(\d{1,2})[-./]/);
+    const m3 = dateStr.match(/^0?(\d{1,2})[-./]/);
     if (m3) return parseInt(m3[1], 10);
   }
-  if (sheetTitle) {
-    const s1 = sheetTitle.match(/(\d{1,2})월/);
-    if (s1) return parseInt(s1[1], 10);
-    const s2 = sheetTitle.match(/(\d{4})[-_](\d{1,2})/);
-    if (s2) return parseInt(s2[2], 10);
-  }
   return null;
+}
+
+/**
+ * Robust category name equality (ignoring internal/surrounding whitespace and case)
+ */
+function isSameCategory(catA?: string, catB?: string): boolean {
+  if (!catA || !catB) return false;
+  const a = catA.trim().replace(/\s+/g, '').toLowerCase();
+  const b = catB.trim().replace(/\s+/g, '').toLowerCase();
+  return a === b;
 }
 
 export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
   yearData = USER_2026_DATA,
   onSelectMonth,
   transactions,
+  activeSheetTitle,
   onEditTransaction,
   customCategories,
   customPaymentMethods,
+  spreadsheetId,
+  accessToken,
+  sheetTabs,
+  isRealGoogleConnected,
+  onFetchMonthTransactions,
 }) => {
   const [sortField, setSortField] = useState<'total' | 'name'>('total');
   const [filterZero, setFilterZero] = useState<boolean>(true);
   const [searchCat, setSearchCat] = useState<string>('');
+
+  // Multi-month real transactions cache: monthNumber (1..12) -> Transaction[]
+  const [monthCache, setMonthCache] = useState<Record<number, Transaction[]>>({});
+  const [isLoadingMonthData, setIsLoadingMonthData] = useState<boolean>(false);
 
   // Annual chart view mode: 'category' (stacked colors per category) vs 'spendingType' (고정, 일반, 특별 구분)
   const [chartViewMode, setChartViewMode] = useState<'category' | 'spendingType'>('category');
@@ -195,6 +223,103 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
 
   // Local optimistic transaction overrides for immediate UI reflection in matrix view
   const [localTxOverrides, setLocalTxOverrides] = useState<Transaction[]>([]);
+
+  // Seed monthCache whenever props.transactions updates with real data for active sheet
+  useEffect(() => {
+    if (transactions && transactions.length > 0) {
+      const realOnly = transactions.filter(
+        (t) => !t.id?.startsWith('user-2026-') && !t.id?.startsWith('sample-')
+      );
+      if (realOnly.length > 0) {
+        const detectedMonth = extractMonthNumber(
+          realOnly[0]?.date,
+          realOnly[0]?.sheetTitle || activeSheetTitle
+        );
+        if (detectedMonth !== null) {
+          setMonthCache((prev) => ({
+            ...prev,
+            [detectedMonth]: realOnly,
+          }));
+        }
+      }
+    }
+  }, [transactions, activeSheetTitle]);
+
+  // When user clicks a matrix cell for a specific month, fetch real Google Sheet tab if not yet loaded
+  useEffect(() => {
+    if (!selectedCellDetail) return;
+    const { monthNumber } = selectedCellDetail;
+
+    if (monthCache[monthNumber] !== undefined) {
+      return;
+    }
+
+    // Check if props.transactions already has REAL items for this month, AND the active tab matches this month
+    const activeMonth = extractMonthNumber(undefined, activeSheetTitle);
+    if (activeMonth === monthNumber && transactions && transactions.length > 0) {
+      const realExisting = transactions.filter(
+        (t) =>
+          !t.id?.startsWith('user-2026-') &&
+          !t.id?.startsWith('sample-') &&
+          extractMonthNumber(t.date, t.sheetTitle) === monthNumber
+      );
+      if (realExisting.length > 0) {
+        setMonthCache((prev) => ({
+          ...prev,
+          [monthNumber]: realExisting,
+        }));
+        return;
+      }
+    }
+
+    // Fetch real Google Sheet tab on demand!
+    if (onFetchMonthTransactions) {
+      let isCancelled = false;
+      setIsLoadingMonthData(true);
+
+      onFetchMonthTransactions(monthNumber)
+        .then((fetchedTxs) => {
+          if (!isCancelled) {
+            const cleanTxs = (fetchedTxs || []).filter(
+              (t) => !t.id?.startsWith('user-2026-') && !t.id?.startsWith('sample-')
+            );
+            setMonthCache((prev) => ({
+              ...prev,
+              [monthNumber]: cleanTxs,
+            }));
+          }
+        })
+        .catch((err) => {
+          console.warn(`Failed to fetch transactions for month ${monthNumber}:`, err);
+          if (!isCancelled) {
+            setMonthCache((prev) => ({
+              ...prev,
+              [monthNumber]: [],
+            }));
+          }
+        })
+        .finally(() => {
+          if (!isCancelled) {
+            setIsLoadingMonthData(false);
+          }
+        });
+
+      return () => {
+        isCancelled = true;
+      };
+    } else {
+      setMonthCache((prev) => ({
+        ...prev,
+        [monthNumber]: [],
+      }));
+    }
+  }, [
+    selectedCellDetail,
+    monthCache,
+    transactions,
+    activeSheetTitle,
+    onFetchMonthTransactions,
+  ]);
 
   const months = useMemo(
     () => ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'],
@@ -383,14 +508,33 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     const { category, monthNumber } = selectedCellDetail;
     const results: MatchedMatrixItem[] = [];
 
-    // 1. Try matching from effectiveTransactions
-    let matchedFromTransactions = false;
+    // Determine candidate transactions for this month:
+    let candidateTxs: Transaction[] = [];
+    if (monthCache[monthNumber] !== undefined) {
+      candidateTxs = monthCache[monthNumber];
+    } else {
+      const activeMonth = extractMonthNumber(undefined, activeSheetTitle);
+      if (activeMonth === monthNumber) {
+        candidateTxs = effectiveTransactions.filter(
+          (t) =>
+            !t.id?.startsWith('user-2026-') &&
+            !t.id?.startsWith('sample-') &&
+            extractMonthNumber(t.date, t.sheetTitle) === monthNumber
+        );
+      }
+    }
 
-    effectiveTransactions.forEach((t) => {
+    // Apply local transaction overrides if any
+    const finalTxs = candidateTxs.map((t) => {
+      const override = localTxOverrides.find((o) => o.id === t.id);
+      return override || t;
+    });
+
+    finalTxs.forEach((t) => {
       if (t.type && t.type !== 'expense') return;
 
       const txMonth = extractMonthNumber(t.date, t.sheetTitle);
-      if (txMonth !== monthNumber) return;
+      if (txMonth !== null && txMonth !== monthNumber) return;
 
       const isRec = Boolean(
         t.isRecurring ||
@@ -409,9 +553,8 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
         let hasMatchedSub = false;
         t.subItems.forEach((sub) => {
           const subCat = sub.category || t.category;
-          if (subCat === category) {
+          if (isSameCategory(subCat, category)) {
             hasMatchedSub = true;
-            matchedFromTransactions = true;
             results.push({
               tx: t,
               matchedAmount: Number(sub.amount) || 0,
@@ -428,8 +571,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
       }
 
       // Check main transaction category
-      if (t.category === category) {
-        matchedFromTransactions = true;
+      if (isSameCategory(t.category, category)) {
         results.push({
           tx: t,
           matchedAmount: t.amount,
@@ -441,61 +583,16 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
       }
     });
 
-    // 2. If no items matched from current transactions dataset, generate from standard monthly sample
-    if (results.length === 0 && monthNumber >= 1 && monthNumber <= 12) {
-      const sampleTxs: Transaction[] = generateUserMonthlyTransactions(monthNumber - 1);
-      sampleTxs.forEach((t) => {
-        if (t.type && t.type !== 'expense') return;
-
-        const isRec = Boolean(
-          t.isRecurring ||
-          t.memo?.includes('[정기예산]') ||
-          t.memo?.includes('[고정지출]')
-        );
-        const isSpec = Boolean(
-          t.isSpecial ||
-          t.memo?.includes('[특별지출]') ||
-          t.memo?.includes('[비정기지출]')
-        );
-
-        if (t.subItems && t.subItems.length > 0) {
-          let hasMatchedSub = false;
-          t.subItems.forEach((sub) => {
-            const subCat = sub.category || t.category;
-            if (subCat === category) {
-              hasMatchedSub = true;
-              results.push({
-                tx: t,
-                matchedAmount: Number(sub.amount) || 0,
-                subItemName: sub.name,
-                isSubItem: true,
-                subItemId: sub.id,
-                category: subCat,
-                isRecurring: isRec,
-                isSpecial: isSpec,
-              });
-            }
-          });
-          if (hasMatchedSub) return;
-        }
-
-        if (t.category === category) {
-          results.push({
-            tx: t,
-            matchedAmount: t.amount,
-            isSubItem: false,
-            category: t.category,
-            isRecurring: isRec,
-            isSpecial: isSpec,
-          });
-        }
-      });
-    }
-
     // Sort by date descending
     results.sort((a, b) => (b.tx.date || '').localeCompare(a.tx.date || ''));
     return results;
-  }, [selectedCellDetail, effectiveTransactions]);
+  }, [
+    selectedCellDetail,
+    monthCache,
+    effectiveTransactions,
+    localTxOverrides,
+    activeSheetTitle,
+  ]);
 
   // Open In-Place Edit Modal
   const handleOpenEdit = (tx: Transaction) => {
@@ -577,6 +674,25 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
         }
         return next;
       });
+
+      // Also update monthCache so the drill-down list updates immediately
+      const mNum = extractMonthNumber(updatedTx.date, updatedTx.sheetTitle);
+      if (mNum !== null) {
+        setMonthCache((prev) => {
+          const list = prev[mNum] || [];
+          const idx = list.findIndex((t) => t.id === updatedTx.id);
+          const nextList = [...list];
+          if (idx >= 0) {
+            nextList[idx] = updatedTx;
+          } else {
+            nextList.unshift(updatedTx);
+          }
+          return {
+            ...prev,
+            [mNum]: nextList,
+          };
+        });
+      }
 
       // Show toast
       setEditNoticeToast(`'${updatedTx.description}' 내역이 성공적으로 수정되었습니다.`);
@@ -1229,15 +1345,45 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
 
             {/* Items List Body */}
             <div className="p-4 sm:p-5 overflow-y-auto space-y-2 flex-1">
-              {cellDetailItems.length === 0 ? (
-                <div className="py-12 text-center text-slate-400 space-y-1">
-                  <Tag className="w-8 h-8 mx-auto text-slate-300" />
-                  <p className="text-xs font-bold text-slate-600">
-                    {selectedCellDetail.monthName} '{selectedCellDetail.category}'의 세부 거래 내역을 불러오는 중입니다.
+              {isLoadingMonthData ? (
+                <div className="py-14 text-center text-slate-500 space-y-2.5">
+                  <Loader2 className="w-8 h-8 mx-auto text-blue-600 animate-spin" />
+                  <p className="text-xs font-bold text-slate-800">
+                    구글 시트 '{selectedCellDetail.monthName}' 탭에서 실제 지출 내역을 불러오는 중입니다...
                   </p>
                   <p className="text-[11px] text-slate-400">
-                    상단 가계부 탭에서 해당 월을 열어 최신 내역을 확인할 수도 있습니다.
+                    시트의 '{selectedCellDetail.category}' 항목을 실시간 확인하고 있습니다.
                   </p>
+                </div>
+              ) : cellDetailItems.length === 0 ? (
+                <div className="py-10 text-center text-slate-400 space-y-2">
+                  <Tag className="w-8 h-8 mx-auto text-slate-300" />
+                  <p className="text-xs font-bold text-slate-700">
+                    {selectedCellDetail.monthName} 시트 탭에 '{selectedCellDetail.category}' 내역이 없습니다.
+                  </p>
+                  <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
+                    {selectedCellDetail.amount > 0 ? (
+                      <>
+                        대시보드 합계 셀에는 {selectedCellDetail.amount.toLocaleString('ko-KR')}원이 집계되어 있으나, {selectedCellDetail.monthName} 탭에서 일치하는 행을 찾지 못했습니다. 카테고리 명칭(오탈자나 띄어쓰기)을 확인해 주세요.
+                      </>
+                    ) : (
+                      <>해당 월에는 이 카테고리로 등록된 지출 내역이 없습니다.</>
+                    )}
+                  </p>
+                  {onSelectMonth && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const mName = selectedCellDetail.monthName;
+                        setSelectedCellDetail(null);
+                        onSelectMonth(mName);
+                      }}
+                      className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 font-bold text-xs rounded-xl border border-blue-200 hover:bg-blue-100 transition cursor-pointer"
+                    >
+                      <span>{selectedCellDetail.monthName} 탭으로 이동하여 전체 내역 확인</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-1.5">

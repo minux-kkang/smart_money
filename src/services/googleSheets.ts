@@ -458,8 +458,11 @@ export function analyzeSheetStructure(
     if (recurringTypeCol === -1 && /^(지출유형|지출구분|비용구분|정기특별|정특|예산유형|고정특별|expensetype)$/.test(clean)) {
       recurringTypeCol = idx;
     }
-    // 0. Sub-items (세부품목 / 품목상세 / 세부내역 / 세부)
-    else if (subItemsCol === -1 && /^(세부품목|품목상세|세부내역|세부품목명|품목내역|subitems|subitem)$/.test(clean)) {
+    // 0. Sub-items (세부품목 / 상세품목 / 품목상세 / 세부항목 / 상세항목 / 세부내역 / 상세내역 / 품목내역 / 품목세부 / 세부내용 / 상세내용 / 세부 / 상세)
+    else if (
+      subItemsCol === -1 &&
+      /^(세부품목|상세품목|품목상세|세부항목|상세항목|세부내역|상세내역|품목내역|품목세부|세부내용|상세내용|세부|상세|subitems?|sub_items?)$/i.test(clean)
+    ) {
       subItemsCol = idx;
     }
     // 1. Date
@@ -486,8 +489,12 @@ export function analyzeSheetStructure(
     else if (merchantCol === -1 && /^(사용처|가맹점|상호|상호명|가맹점명|거래처|거래처명|지출처|구입처|구매처|결제처|판매처|매장|매장명|merchant|store|vendor)$/.test(clean)) {
       merchantCol = idx;
     }
-    // 7. Item / Content (내용, 품명, 품목, 적요, 내역, 지출내역, 사용내역, 거래내역, 지출내용, 상세내용, 품목명, 적요란)
-    else if (itemCol === -1 && /^(내용|품명|품목|적요|내역|지출내역|사용내역|거래내역|지출내용|상세내용|품목명|적요란|item|description|detail|details)$/.test(clean)) {
+    // 7. Item / Content (내용, 품명, 품목, 적요, 내역, 지출내역, 사용내역, 거래내역, 지출내용, 품목명, 적요란)
+    else if (
+      itemCol === -1 &&
+      !/(세부|상세품목|세부항목|상세항목|품목상세|품목세부)/i.test(clean) &&
+      /^(내용|품명|품목|적요|내역|지출내역|사용내역|거래내역|지출내용|품목명|적요란|item|description|detail|details)$/.test(clean)
+    ) {
       itemCol = idx;
     }
     // 8. Income
@@ -515,7 +522,7 @@ export function analyzeSheetStructure(
   // Secondary check: If categoryCol is still -1, check for '항목' or '계정과목'
   if (categoryCol === -1) {
     cleanHeaders.forEach((clean, idx) => {
-      if (idx !== dateCol && idx !== typeCol && idx !== amountCol && idx !== merchantCol && idx !== incomeCol && idx !== expenseCol) {
+      if (idx !== dateCol && idx !== typeCol && idx !== amountCol && idx !== merchantCol && idx !== incomeCol && idx !== expenseCol && idx !== subItemsCol) {
         if (/^(항목|항목명|계정과목)$/.test(clean)) {
           categoryCol = idx;
         }
@@ -525,21 +532,30 @@ export function analyzeSheetStructure(
 
   // Fuzzy pass: contains matching for unassigned columns
   cleanHeaders.forEach((clean, idx) => {
-    if (idx === dateCol || idx === typeCol || idx === amountCol || idx === incomeCol || idx === expenseCol || idx === categoryCol) return;
+    if (idx === dateCol || idx === typeCol || idx === amountCol || idx === incomeCol || idx === expenseCol || idx === categoryCol || idx === subItemsCol) return;
 
     if (recurringTypeCol === -1 && /(지출유형|지출구분|정기.*특별|정.*특)/.test(clean)) {
       recurringTypeCol = idx;
     }
-    if (subItemsCol === -1 && /(세부품목|품목상세|세부내역)/.test(clean)) {
+    if (
+      subItemsCol === -1 &&
+      /(세부품목|상세품목|품목상세|세부항목|상세항목|세부내역|상세내역|품목내역|품목세부|세부내용|상세내용)/i.test(clean)
+    ) {
       subItemsCol = idx;
     }
     if (merchantCol === -1 && /(사용처|가맹점|상호|지출처|구입처|구매처|결제처|매장)/.test(clean)) {
       merchantCol = idx;
     }
-    if (itemCol === -1 && /(내용|품명|품목|적요|지출내용|내역)/.test(clean) && idx !== merchantCol) {
+    if (
+      itemCol === -1 &&
+      !/(세부|상세품목|세부항목|상세항목|품목상세|품목세부)/i.test(clean) &&
+      /(내용|품명|품목|적요|지출내용|내역)/.test(clean) &&
+      idx !== merchantCol &&
+      idx !== subItemsCol
+    ) {
       itemCol = idx;
     }
-    if (categoryCol === -1 && /(분류|카테고리|항목)/.test(clean) && idx !== merchantCol && idx !== itemCol) {
+    if (categoryCol === -1 && /(분류|카테고리|항목)/.test(clean) && idx !== merchantCol && idx !== itemCol && idx !== subItemsCol) {
       categoryCol = idx;
     }
   });
@@ -1044,7 +1060,7 @@ export async function appendTransactionRow(
     headerRow.forEach((colName, idx) => {
       const clean = (colName || '').trim().toLowerCase().replace(/[\s_\-\/\(\)\[\],.:;]/g, '');
       if (/^(지출유형|지출구분|비용구분|정기특별|정특|예산유형)$/.test(clean)) mapping.recurringTypeCol = idx;
-      else if (/^(세부품목|품목상세|세부내역|품목내역)$/.test(clean)) mapping.subItemsCol = idx;
+      else if (/^(세부품목|상세품목|품목상세|세부항목|상세항목|세부내역|상세내역|품목내역|품목세부|세부내용|상세내용|세부|상세|subitems?|sub_items?)$/i.test(clean)) mapping.subItemsCol = idx;
       else if (/^(날짜|일자|일시|date)$/.test(clean)) mapping.dateCol = idx;
       else if (/^(구분|유형|수입지출|입출|type)$/.test(clean)) mapping.typeCol = idx;
       else if (/^(분류|카테고리|항목|계정|category)$/.test(clean)) mapping.categoryCol = idx;
@@ -1341,7 +1357,7 @@ export async function appendBatchTransactions(
     headerRow.forEach((colName, idx) => {
       const clean = (colName || '').trim().toLowerCase().replace(/[\s_\-\/\(\)\[\],.:;]/g, '');
       if (/^(지출유형|지출구분|비용구분|정기특별|정특|예산유형)$/.test(clean)) mapping.recurringTypeCol = idx;
-      else if (/^(세부품목|품목상세|세부내역|품목내역)$/.test(clean)) mapping.subItemsCol = idx;
+      else if (/^(세부품목|상세품목|품목상세|세부항목|상세항목|세부내역|상세내역|품목내역|품목세부|세부내용|상세내용|세부|상세|subitems?|sub_items?)$/i.test(clean)) mapping.subItemsCol = idx;
       else if (/^(날짜|일자|일시|date)$/.test(clean)) mapping.dateCol = idx;
       else if (/^(구분|유형|수입지출|입출|type)$/.test(clean)) mapping.typeCol = idx;
       else if (/^(분류|카테고리|항목|계정|category)$/.test(clean)) mapping.categoryCol = idx;
@@ -2466,20 +2482,26 @@ export function findTabForMonth(
 ): { id: number; title: string } | undefined {
   if (!tabs || tabs.length === 0) return undefined;
 
-  // 1. Exact match with `${targetMonth}월` or `${String(targetMonth).padStart(2, '0')}월`
-  const exactKor = tabs.find(
-    (t) => t.title === `${targetMonth}월` || t.title === `${String(targetMonth).padStart(2, '0')}월`
-  );
+  // 1. Trimmed exact match with `${targetMonth}월` or `${String(targetMonth).padStart(2, '0')}월`
+  const exactKor = tabs.find((t) => {
+    const trimmed = (t.title || '').trim();
+    return (
+      trimmed === `${targetMonth}월` ||
+      trimmed === `${String(targetMonth).padStart(2, '0')}월` ||
+      trimmed.replace(/\s+/g, '') === `${targetMonth}월`
+    );
+  });
   if (exactKor) return exactKor;
 
   // 2. Exact match with `${targetMonth}` or `${String(targetMonth).padStart(2, '0')}`
-  const exactNum = tabs.find(
-    (t) => t.title.trim() === String(targetMonth) || t.title.trim() === String(targetMonth).padStart(2, '0')
-  );
+  const exactNum = tabs.find((t) => {
+    const trimmed = (t.title || '').trim();
+    return trimmed === String(targetMonth) || trimmed === String(targetMonth).padStart(2, '0');
+  });
   if (exactNum) return exactNum;
 
   // 3. Match via extractMonthNumberFromTab
-  const parsedMatch = tabs.find((t) => extractMonthNumberFromTab(t.title) === targetMonth);
+  const parsedMatch = tabs.find((t) => extractMonthNumberFromTab((t.title || '').trim()) === targetMonth);
   if (parsedMatch) return parsedMatch;
 
   return undefined;

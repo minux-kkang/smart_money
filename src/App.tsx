@@ -9,6 +9,7 @@ import {
   refreshGoogleToken,
   isAuthExpiredError,
   saveAuthSession,
+  getSavedToken,
 } from './services/firebase';
 import {
   getSpreadsheetDetails,
@@ -256,12 +257,23 @@ export default function App() {
 
   const [transactions, setTransactions] = useState<Transaction[]>(() => {
     try {
+      const savedSheetId = localStorage.getItem('smart_money_spreadsheet_id');
+      const isRealSheet = savedSheetId && !['sample-ledger-2026', 'user-2026-ledger', 'pasted-sheet'].includes(savedSheetId);
+      
       const saved = localStorage.getItem('smart_money_user_transactions_v2');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
+          const hasDummy = parsed.some((t: any) => t.id?.startsWith('user-2026-') || t.id?.startsWith('sample-'));
+          if (isRealSheet && hasDummy) {
+            localStorage.removeItem('smart_money_user_transactions_v2');
+            return [];
+          }
           return enrichTransactionsWithSubItems(parsed);
         }
+      }
+      if (isRealSheet) {
+        return [];
       }
     } catch (e) {
       console.warn('Could not load local transactions:', e);
@@ -581,6 +593,39 @@ export default function App() {
       }));
     }
   };
+
+  // Fetch real transactions for a specific month tab on demand (used by AnnualMatrixView)
+  const handleFetchMonthTransactions = useCallback(
+    async (monthNum: number): Promise<Transaction[]> => {
+      if (!spreadsheetId) return [];
+      const effectiveToken = accessToken || getSavedToken() || null;
+      let targetTabTitle: string | null = null;
+
+      const matchedTab = findTabForMonth(sheetTabs, monthNum);
+      if (matchedTab) {
+        targetTabTitle = matchedTab.title;
+      } else {
+        // Fallback: check standard tab names e.g. "8월", "08월"
+        const fallbackNames = [`${monthNum}월`, `${String(monthNum).padStart(2, '0')}월`, `${monthNum}`];
+        const found = sheetTabs.find((t) => fallbackNames.includes(t.title?.trim()));
+        targetTabTitle = found ? found.title : `${monthNum}월`;
+      }
+
+      try {
+        const rows = await getSheetValues(spreadsheetId, targetTabTitle, effectiveToken, 'A:Z');
+        if (!rows || rows.length === 0) return [];
+        const result = analyzeSheetStructure(spreadsheetId, spreadsheetTitle, sheetTabs, targetTabTitle, rows);
+        const realTransactions = (result.transactions || []).filter(
+          (t) => !t.id?.startsWith('user-2026-') && !t.id?.startsWith('sample-')
+        );
+        return enrichTransactionsWithSubItems(realTransactions);
+      } catch (err) {
+        console.warn(`Failed to fetch transactions for ${targetTabTitle}:`, err);
+        return [];
+      }
+    },
+    [spreadsheetId, accessToken, sheetTabs, spreadsheetTitle]
+  );
 
   // When user selects a different spreadsheet from Google Drive
   const handleSelectSpreadsheet = async (id: string, name: string, tokenOverride?: string) => {
@@ -2218,9 +2263,15 @@ export default function App() {
               yearData={yearData}
               onSelectMonth={handleSelectSheetTab}
               transactions={transactions}
+              activeSheetTitle={activeSheetTitle}
               onEditTransaction={handleEditTransaction}
               customCategories={customCategories}
               customPaymentMethods={customPaymentMethods}
+              spreadsheetId={spreadsheetId}
+              accessToken={accessToken}
+              sheetTabs={sheetTabs}
+              isRealGoogleConnected={isRealGoogleConnected}
+              onFetchMonthTransactions={handleFetchMonthTransactions}
             />
           ) : activeTab === 'monthly' ? (
             <Dashboard
