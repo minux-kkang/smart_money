@@ -525,6 +525,18 @@ export default function App() {
           }
           setActiveTab('matrix');
         } else {
+          // If a dashboard or annual matrix tab exists elsewhere in the sheet, sync yearData in the background
+          const dashTab = formattedTabs.find((t) => isDashboardTab(t.title));
+          if (dashTab && targetSheet !== dashTab.title) {
+            getSheetValues(sId, dashTab.title, token, 'A:Z')
+              .then((dashRows) => {
+                const matrix = extractYearMatrixData(dashRows);
+                if (matrix && matrix.categories.length > 0) {
+                  setYearData(matrix);
+                }
+              })
+              .catch((err) => console.warn('Background dashboard tab sync warning:', err));
+          }
           // Find any pending transactions for this month or sheet so they are never wiped!
           const currentPending = loadPendingQueue();
           const pendingForThisSheet = currentPending.filter((p) => {

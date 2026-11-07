@@ -221,6 +221,36 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
   const [isSubmittingEdit, setIsSubmittingEdit] = useState<boolean>(false);
   const [editNoticeToast, setEditNoticeToast] = useState<string | null>(null);
 
+  // Sync all 12 months from Google Sheets
+  const [isSyncingAllMonths, setIsSyncingAllMonths] = useState<boolean>(false);
+  const [syncProgress, setSyncProgress] = useState<string>('');
+
+  const handleSyncAllMonths = async () => {
+    if (!onFetchMonthTransactions || isSyncingAllMonths) return;
+    setIsSyncingAllMonths(true);
+    try {
+      for (let m = 1; m <= 12; m++) {
+        setSyncProgress(`${m}월 조회 중... (${m}/12)`);
+        const txs = await onFetchMonthTransactions(m);
+        const clean = (txs || []).filter(
+          (t) => !t.id?.startsWith('user-2026-') && !t.id?.startsWith('sample-')
+        );
+        setMonthCache((prev) => ({
+          ...prev,
+          [m]: clean,
+        }));
+      }
+      setSyncProgress('전체 12개월 동기화 완료!');
+      setTimeout(() => setSyncProgress(''), 3000);
+    } catch (e) {
+      console.warn('Sync all months error:', e);
+      setSyncProgress('일부 월 동기화 실패');
+      setTimeout(() => setSyncProgress(''), 3000);
+    } finally {
+      setIsSyncingAllMonths(false);
+    }
+  };
+
   // Local optimistic transaction overrides for immediate UI reflection in matrix view
   const [localTxOverrides, setLocalTxOverrides] = useState<Transaction[]>([]);
 
@@ -342,32 +372,131 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     return list;
   }, [transactions, localTxOverrides]);
 
+  // Dynamically compute real YearDashboardData merging yearData with actual loaded month transactions
+  const effectiveYearData = useMemo<YearDashboardData>(() => {
+    const catMap = new Map<string, number[]>(); // category -> 12 monthly amounts
+
+    // 1. Initialize from yearData if available
+    yearData.categories.forEach((cat) => {
+      catMap.set(cat.category, [...cat.monthly]);
+    });
+
+    // 2. Override months where we have loaded real transactions in monthCache
+    // (or where effectiveTransactions belongs to activeSheetTitle)
+    for (let m = 1; m <= 12; m++) {
+      const monthIdx = m - 1;
+      let monthTxs: Transaction[] | undefined = monthCache[m];
+
+      if (!monthTxs) {
+        const activeMonth = extractMonthNumber(undefined, activeSheetTitle);
+        if (activeMonth === m && effectiveTransactions.length > 0) {
+          const realTxs = effectiveTransactions.filter(
+            (t) =>
+              !t.id?.startsWith('user-2026-') &&
+              !t.id?.startsWith('sample-') &&
+              extractMonthNumber(t.date, t.sheetTitle) === m
+          );
+          if (realTxs.length > 0) {
+            monthTxs = realTxs;
+          }
+        }
+      }
+
+      // If this month has been loaded with real data, compute exact category sums!
+      if (monthTxs !== undefined) {
+        // Reset this month's amounts for all categories in catMap
+        catMap.forEach((monthly) => {
+          monthly[monthIdx] = 0;
+        });
+
+        // Sum actual transactions for this month
+        monthTxs.forEach((t) => {
+          if (t.type && t.type !== 'expense') return;
+
+          // Check sub-items
+          if (t.subItems && t.subItems.length > 0) {
+            t.subItems.forEach((sub) => {
+              const subCat = (sub.category || t.category || '기타').trim();
+              let matchedKey: string | null = null;
+              for (const k of catMap.keys()) {
+                if (isSameCategory(k, subCat)) {
+                  matchedKey = k;
+                  break;
+                }
+              }
+              const keyToUse = matchedKey || subCat;
+              if (!catMap.has(keyToUse)) {
+                catMap.set(keyToUse, new Array(12).fill(0));
+              }
+              catMap.get(keyToUse)![monthIdx] += Number(sub.amount) || 0;
+            });
+            return;
+          }
+
+          // Main transaction
+          const mainCat = (t.category || '기타').trim();
+          let matchedKey: string | null = null;
+          for (const k of catMap.keys()) {
+            if (isSameCategory(k, mainCat)) {
+              matchedKey = k;
+              break;
+            }
+          }
+          const keyToUse = matchedKey || mainCat;
+          if (!catMap.has(keyToUse)) {
+            catMap.set(keyToUse, new Array(12).fill(0));
+          }
+          catMap.get(keyToUse)![monthIdx] += Number(t.amount) || 0;
+        });
+      }
+    }
+
+    // Convert catMap to CategoryMonthlyData[]
+    const categories: CategoryMonthlyData[] = [];
+    catMap.forEach((monthly, category) => {
+      const annualTotal = monthly.reduce((a, b) => a + b, 0);
+      categories.push({
+        category,
+        annualTotal,
+        monthly,
+      });
+    });
+
+    const totalExpense = categories.reduce((sum, c) => sum + c.annualTotal, 0);
+    return {
+      year: yearData.year || 2026,
+      totalIncome: yearData.totalIncome,
+      totalExpense,
+      categories,
+    };
+  }, [yearData, monthCache, effectiveTransactions, activeSheetTitle]);
+
   // Map each category to a distinct color
   const categoryColorMap = useMemo(() => {
     const map: Record<string, string> = {};
-    yearData.categories.forEach((cat, idx) => {
+    effectiveYearData.categories.forEach((cat, idx) => {
       map[cat.category] = CATEGORY_COLOR_PALETTE[idx % CATEGORY_COLOR_PALETTE.length];
     });
     return map;
-  }, [yearData.categories]);
+  }, [effectiveYearData.categories]);
 
   // Top categories for chart legend
   const topCategoriesForLegend = useMemo(() => {
-    return [...yearData.categories]
+    return [...effectiveYearData.categories]
       .filter((c) => c.annualTotal > 0)
       .sort((a, b) => b.annualTotal - a.annualTotal)
       .slice(0, 10);
-  }, [yearData.categories]);
+  }, [effectiveYearData.categories]);
 
   // Available categories list
   const allCategoryNames = useMemo(() => {
     const names = new Set<string>();
-    yearData.categories.forEach((c) => names.add(c.category));
+    effectiveYearData.categories.forEach((c) => names.add(c.category));
     if (customCategories) {
       customCategories.forEach((c) => names.add(c.name));
     }
     return Array.from(names);
-  }, [yearData.categories, customCategories]);
+  }, [effectiveYearData.categories, customCategories]);
 
   // Available payment methods list
   const allPaymentMethodNames = useMemo(() => {
@@ -416,8 +545,8 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
           else rout += t.amount;
         });
       } else {
-        // Fallback to yearData.categories monthly numbers
-        yearData.categories.forEach((cat) => {
+        // Fallback to effectiveYearData.categories monthly numbers
+        effectiveYearData.categories.forEach((cat) => {
           const amt = cat.monthly[mIdx] || 0;
           if (FIXED_BUDGET_CATEGORIES.has(cat.category)) {
             rec += amt;
@@ -438,7 +567,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
         special: spec,
       };
     });
-  }, [months, effectiveTransactions, yearData.categories]);
+  }, [months, effectiveTransactions, effectiveYearData.categories]);
 
   // Annual sums for spending types
   const annualSpendingTypeTotals = useMemo(() => {
@@ -459,11 +588,11 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
 
   // Calculate monthly total across all categories
   const monthlyTotals = months.map((_, mIdx) => {
-    return yearData.categories.reduce((sum, cat) => sum + (cat.monthly[mIdx] || 0), 0);
+    return effectiveYearData.categories.reduce((sum, cat) => sum + (cat.monthly[mIdx] || 0), 0);
   });
 
   // Filtered categories for the matrix table
-  const categories = [...yearData.categories]
+  const categories = [...effectiveYearData.categories]
     .filter((cat) => {
       if (filterZero && cat.annualTotal === 0) return false;
       if (searchCat.trim() && !cat.category.toLowerCase().includes(searchCat.trim().toLowerCase())) {
@@ -476,13 +605,13 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
       return a.category.localeCompare(b.category);
     });
 
-  const balance = yearData.totalIncome - yearData.totalExpense;
-  const savingRate = yearData.totalIncome > 0 ? Math.round((balance / yearData.totalIncome) * 100) : 0;
+  const balance = effectiveYearData.totalIncome - effectiveYearData.totalExpense;
+  const savingRate = effectiveYearData.totalIncome > 0 ? Math.round((balance / effectiveYearData.totalIncome) * 100) : 0;
 
   // Selected Category Data for single-category trend chart
   const selectedCategoryData = useMemo(() => {
     if (!selectedCategoryFilter) return null;
-    const catObj = yearData.categories.find((c) => c.category === selectedCategoryFilter);
+    const catObj = effectiveYearData.categories.find((c) => c.category === selectedCategoryFilter);
     const color = categoryColorMap[selectedCategoryFilter] || '#3B82F6';
     const monthlyAmts = months.map((_, idx) => catObj?.monthly[idx] || 0);
     const total = catObj?.annualTotal || monthlyAmts.reduce((s, a) => s + a, 0);
@@ -499,7 +628,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
       avg,
       activeMonthsCount,
     };
-  }, [selectedCategoryFilter, yearData.categories, categoryColorMap, months]);
+  }, [selectedCategoryFilter, effectiveYearData.categories, categoryColorMap, months]);
 
   // Matching items for the clicked matrix cell (Category + Month)
   const cellDetailItems = useMemo<MatchedMatrixItem[]>(() => {
@@ -591,8 +720,17 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     monthCache,
     effectiveTransactions,
     localTxOverrides,
-    activeSheetTitle,
   ]);
+
+  // Keep selectedCellDetail amount in sync with actual loaded items
+  useEffect(() => {
+    if (selectedCellDetail && cellDetailItems.length > 0) {
+      const realSum = cellDetailItems.reduce((s, it) => s + it.matchedAmount, 0);
+      if (realSum !== selectedCellDetail.amount) {
+        setSelectedCellDetail((prev) => (prev ? { ...prev, amount: realSum } : null));
+      }
+    }
+  }, [selectedCellDetail, cellDetailItems]);
 
   // Open In-Place Edit Modal
   const handleOpenEdit = (tx: Transaction) => {
@@ -740,9 +878,28 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
             </div>
           </div>
 
-          <div className="text-right text-xs shrink-0">
-            <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium">집계 기준</span>
-            <span className="text-xs sm:text-sm font-bold text-slate-200">2026 Dashboard</span>
+          <div className="text-right text-xs shrink-0 flex items-center gap-2">
+            {onFetchMonthTransactions && (
+              <button
+                type="button"
+                onClick={handleSyncAllMonths}
+                disabled={isSyncingAllMonths}
+                className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95"
+                title="1월부터 12월까지 구글 시트의 전체 월 탭 데이터를 모두 불러와 연간 매트릭스를 실시간 데이터로 최신화합니다."
+              >
+                {isSyncingAllMonths ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>{syncProgress || '동기화 중...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    <span>전체 월 데이터 동기화</span>
+                  </>
+                )}
+              </button>
+            )}
           </div>
         </div>
 
@@ -758,7 +915,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
                 </span>
               </div>
               <p className="text-sm sm:text-lg font-black text-emerald-600 truncate mt-0.5">
-                {yearData.totalIncome.toLocaleString('ko-KR')}원
+                {effectiveYearData.totalIncome.toLocaleString('ko-KR')}원
               </p>
             </div>
             <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 ml-1.5 shadow-2xs">
@@ -776,7 +933,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
                 </span>
               </div>
               <p className="text-sm sm:text-lg font-black text-rose-600 truncate mt-0.5">
-                {yearData.totalExpense.toLocaleString('ko-KR')}원
+                {effectiveYearData.totalExpense.toLocaleString('ko-KR')}원
               </p>
             </div>
             <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center shrink-0 ml-1.5 shadow-2xs">
@@ -954,7 +1111,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
               const heightPercent = amt > 0 ? Math.max(Math.round((amt / max) * 100), 6) : 0;
               const isMax = amt === Math.max(...monthlyTotals);
 
-              const monthCats = yearData.categories
+              const monthCats = effectiveYearData.categories
                 .filter((c) => (c.monthly[idx] || 0) > 0)
                 .sort((a, b) => (b.monthly[idx] || 0) - (a.monthly[idx] || 0));
 
@@ -1256,7 +1413,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
                   월별 총 지출 합계
                 </td>
                 <td className="py-3 px-3 text-right text-rose-700 font-black text-sm bg-slate-200">
-                  {yearData.totalExpense.toLocaleString('ko-KR')}원
+                  {effectiveYearData.totalExpense.toLocaleString('ko-KR')}원
                 </td>
                 {monthlyTotals.map((tot, idx) => (
                   <td key={idx} className="py-3 px-2.5 text-right font-black text-slate-900">
