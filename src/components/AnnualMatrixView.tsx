@@ -36,6 +36,7 @@ import {
 } from '../types/ledger';
 import { saveSubItemsForTransaction } from '../services/subItemStorage';
 import { getPaymentGroupBadge } from '../utils/paymentGroupUtils';
+import { extractMonthNumberFromTab } from '../services/googleSheets';
 
 interface AnnualMatrixViewProps {
   yearData?: YearDashboardData;
@@ -128,22 +129,49 @@ interface MatchedMatrixItem {
  */
 function extractMonthNumber(dateStr?: string, sheetTitle?: string): number | null {
   if (sheetTitle) {
-    const s1 = sheetTitle.match(/(?:^|[^0-9])(\d{1,2})월/);
-    if (s1) return parseInt(s1[1], 10);
-    const s2 = sheetTitle.match(/\d{2,4}[-_.](\d{1,2})/);
-    if (s2) return parseInt(s2[2], 10);
-    const s3 = sheetTitle.match(/^0?(\d{1,2})$/);
-    if (s3) return parseInt(s3[1], 10);
+    const fromTab = extractMonthNumberFromTab(sheetTitle);
+    if (fromTab !== null) return fromTab;
   }
   if (dateStr) {
-    const m1 = dateStr.match(/^(\d{4})[-./](\d{1,2})/);
-    if (m1) return parseInt(m1[2], 10);
-    const m2 = dateStr.match(/(?:^|[^0-9])(\d{1,2})월/);
-    if (m2) return parseInt(m2[1], 10);
-    const m3 = dateStr.match(/^0?(\d{1,2})[-./]/);
-    if (m3) return parseInt(m3[1], 10);
+    const ymd = dateStr.match(/^\d{4}\s*[-.\/]\s*(\d{1,2})/);
+    if (ymd) {
+      const m = parseInt(ymd[1], 10);
+      if (m >= 1 && m <= 12) return m;
+    }
+    const kor = dateStr.match(/(?:^|[^0-9])(\d{1,2})월/);
+    if (kor) {
+      const m = parseInt(kor[1], 10);
+      if (m >= 1 && m <= 12) return m;
+    }
+    const md = dateStr.match(/^0?(\d{1,2})[-.\/]/);
+    if (md) {
+      const m = parseInt(md[1], 10);
+      if (m >= 1 && m <= 12) return m;
+    }
   }
   return null;
+}
+
+/**
+ * Validate and sanitize cached monthCache so corrupted/lumped cache from prior bug is repaired!
+ */
+function sanitizeMonthCache(raw: any): Record<number, Transaction[]> {
+  if (!raw || typeof raw !== 'object') return {};
+  const clean: Record<number, Transaction[]> = {};
+  Object.entries(raw).forEach(([mStr, txs]) => {
+    if (!Array.isArray(txs)) return;
+    txs.forEach((t: any) => {
+      if (!t || t.id?.startsWith('user-2026-') || t.id?.startsWith('sample-')) return;
+      const m = extractMonthNumber(t.date, t.sheetTitle) ?? Number(mStr);
+      if (m >= 1 && m <= 12) {
+        if (!clean[m]) clean[m] = [];
+        if (!clean[m].some((existing) => existing.id === t.id)) {
+          clean[m].push(t);
+        }
+      }
+    });
+  });
+  return clean;
 }
 
 /**
@@ -188,7 +216,9 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
       const saved = localStorage.getItem(`smart_money_annual_month_cache_${spreadsheetId || 'default'}`);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === 'object') return parsed;
+        if (parsed && typeof parsed === 'object') {
+          return sanitizeMonthCache(parsed);
+        }
       }
     } catch (e) {
       console.warn('Could not read cached monthCache:', e);
@@ -304,7 +334,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     }
 
     const monthsToFetch = (targetMonths.length > 0 ? targetMonths : [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
-      .filter((m) => monthCache[m] === undefined);
+      .filter((m) => !monthCache[m] || monthCache[m].length === 0);
 
     if (monthsToFetch.length === 0) return;
 
@@ -344,26 +374,42 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
 
   // Seed monthCache whenever props.transactions updates with real data for active sheet
   useEffect(() => {
-    if (transactions && transactions.length > 0) {
-      const realOnly = transactions.filter(
-        (t) => !t.id?.startsWith('user-2026-') && !t.id?.startsWith('sample-')
-      );
-      if (realOnly.length > 0) {
-        const detectedMonth = extractMonthNumber(
-          realOnly[0]?.date,
-          realOnly[0]?.sheetTitle || activeSheetTitle
-        );
-        if (detectedMonth !== null) {
-          setMonthCache((prev) => {
-            const next = { ...prev, [detectedMonth]: realOnly };
-            try {
-              localStorage.setItem(storageKey, JSON.stringify(next));
-            } catch (e) {}
-            return next;
-          });
-        }
+    if (!transactions || transactions.length === 0) return;
+    const realOnly = transactions.filter(
+      (t) => !t.id?.startsWith('user-2026-') && !t.id?.startsWith('sample-')
+    );
+    if (realOnly.length === 0) return;
+
+    // Properly group transactions by each individual item's true month!
+    const grouped: Record<number, Transaction[]> = {};
+    realOnly.forEach((t) => {
+      const m = extractMonthNumber(t.date, t.sheetTitle || activeSheetTitle);
+      if (m !== null && m >= 1 && m <= 12) {
+        if (!grouped[m]) grouped[m] = [];
+        grouped[m].push(t);
       }
-    }
+    });
+
+    setMonthCache((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      Object.entries(grouped).forEach(([mStr, txList]) => {
+        const m = Number(mStr);
+        const activeMonth = extractMonthNumber(undefined, activeSheetTitle);
+        // Only update if it's the actively viewed sheet month, or if monthCache[m] is empty/unset
+        if (m === activeMonth || !next[m] || next[m].length === 0) {
+          next[m] = txList;
+          changed = true;
+        }
+      });
+      if (changed) {
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      }
+      return prev;
+    });
   }, [transactions, activeSheetTitle, storageKey]);
 
   // When user clicks a matrix cell for a specific month, fetch real Google Sheet tab if not yet loaded
@@ -499,19 +545,15 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     for (let m = 1; m <= 12; m++) {
       const monthIdx = m - 1;
       let monthTxs: Transaction[] | undefined = monthCache[m];
-
-      if (!monthTxs) {
-        const activeMonth = extractMonthNumber(undefined, activeSheetTitle);
-        if (activeMonth === m && effectiveTransactions.length > 0) {
-          const realTxs = effectiveTransactions.filter(
-            (t) =>
-              !t.id?.startsWith('user-2026-') &&
-              !t.id?.startsWith('sample-') &&
-              extractMonthNumber(t.date, t.sheetTitle) === m
-          );
-          if (realTxs.length > 0) {
-            monthTxs = realTxs;
-          }
+      if (!monthTxs || monthTxs.length === 0) {
+        const matchingTxs = effectiveTransactions.filter(
+          (t) =>
+            !t.id?.startsWith('user-2026-') &&
+            !t.id?.startsWith('sample-') &&
+            extractMonthNumber(t.date, t.sheetTitle || activeSheetTitle) === m
+        );
+        if (matchingTxs.length > 0) {
+          monthTxs = matchingTxs;
         }
       }
 
@@ -1132,9 +1174,13 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
             <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200/80 shrink-0">
               {selectedCategoryData ? (
                 <>연간 합계: {selectedCategoryData.total.toLocaleString('ko-KR')}원</>
-              ) : (
-                <>최고 지출: 9월 ({Math.max(...monthlyTotals).toLocaleString('ko-KR')}원)</>
-              )}
+              ) : (() => {
+                const maxVal = Math.max(...monthlyTotals, 0);
+                if (maxVal <= 0) return <>지출 집계 대기 중</>;
+                const maxIdx = monthlyTotals.indexOf(maxVal);
+                const maxMonthName = maxIdx >= 0 ? months[maxIdx] : '';
+                return <>최고 지출: {maxMonthName} ({maxVal.toLocaleString('ko-KR')}원)</>;
+              })()}
             </span>
           </div>
         </div>
