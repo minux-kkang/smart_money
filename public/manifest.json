@@ -1,0 +1,16 @@
+{
+  "short_name": "스마트가계부",
+  "name": "스마트 가계부 - 구글 시트 연동",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ],
+  "start_url": "./",
+  "display": "standalone",
+  "theme_color": "#2563eb",
+  "background_color": "#ffffff",
+  "orientation": "portrait"
+}
