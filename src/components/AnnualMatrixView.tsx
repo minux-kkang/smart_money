@@ -241,8 +241,18 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
   // Annual chart view mode: 'category' (stacked colors per category) vs 'spendingType' (고정, 일반, 특별 구분)
   const [chartViewMode, setChartViewMode] = useState<'category' | 'spendingType'>('category');
 
-  // Filter chart by a single selected category (User request: 카테고리 누르면 해당 카테고리만 그래프에 표시)
-  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string | null>(null);
+  // Filter chart by selected categories (Multi-select enabled per user request)
+  const [selectedCategoryFilters, setSelectedCategoryFilters] = useState<string[]>([]);
+
+  const handleToggleCategoryFilter = (catName: string) => {
+    setSelectedCategoryFilters((prev) => {
+      if (prev.includes(catName)) {
+        return prev.filter((c) => c !== catName);
+      } else {
+        return [...prev, catName];
+      }
+    });
+  };
 
   // Matrix cell drill-down modal state (User request: 특정 월 특정 분류 금액 누르면 해당 항목들 리스트업 & 수정)
   const [selectedCellDetail, setSelectedCellDetail] = useState<{
@@ -778,27 +788,30 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
   const balance = effectiveYearData.totalIncome - effectiveYearData.totalExpense;
   const savingRate = effectiveYearData.totalIncome > 0 ? Math.round((balance / effectiveYearData.totalIncome) * 100) : 0;
 
-  // Selected Category Data for single-category trend chart
-  const selectedCategoryData = useMemo(() => {
-    if (!selectedCategoryFilter) return null;
-    const catObj = effectiveYearData.categories.find((c) => c.category === selectedCategoryFilter);
-    const color = categoryColorMap[selectedCategoryFilter] || '#3B82F6';
-    const monthlyAmts = months.map((_, idx) => catObj?.monthly[idx] || 0);
-    const total = catObj?.annualTotal || monthlyAmts.reduce((s, a) => s + a, 0);
+  // Selected Category Data for single or multi-category trend chart
+  const selectedCategoriesData = useMemo(() => {
+    if (selectedCategoryFilters.length === 0) return null;
+    const catList = effectiveYearData.categories.filter((c) =>
+      selectedCategoryFilters.includes(c.category)
+    );
+    const monthlyAmts = months.map((_, idx) =>
+      catList.reduce((sum, c) => sum + (c.monthly[idx] || 0), 0)
+    );
+    const total = monthlyAmts.reduce((sum, a) => sum + a, 0);
     const max = Math.max(...monthlyAmts, 1);
     const activeMonthsCount = monthlyAmts.filter((a) => a > 0).length || 1;
     const avg = Math.round(total / (activeMonthsCount || 1));
 
     return {
-      category: selectedCategoryFilter,
-      color,
+      filters: selectedCategoryFilters,
+      categories: catList,
       monthlyAmts,
       total,
       max,
       avg,
       activeMonthsCount,
     };
-  }, [selectedCategoryFilter, effectiveYearData.categories, categoryColorMap, months]);
+  }, [selectedCategoryFilters, effectiveYearData.categories, months]);
 
   // Matching items for the clicked matrix cell (Category + Month)
   const cellDetailItems = useMemo<MatchedMatrixItem[]>(() => {
@@ -1117,63 +1130,69 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
       <div className="p-4 sm:p-6 bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 mb-3">
           <div>
-            <h3 className="text-sm sm:text-base font-black text-slate-900 flex items-center gap-1.5">
+            <h3 className="text-sm sm:text-base font-black text-slate-900 flex items-center gap-1.5 flex-wrap">
               <Sparkles className="w-4 h-4 text-blue-600 shrink-0" />
-              <span>
-                2026년 월별 {selectedCategoryFilter ? `[${selectedCategoryFilter}] 지출 추이` : '총 지출 추이'} (1월 ~ 12월)
+              <span className="whitespace-nowrap">
+                {selectedCategoryFilters.length === 0
+                  ? '2026년 월별 총 지출 추이 (1월 ~ 12월)'
+                  : selectedCategoryFilters.length === 1
+                  ? `2026년 월별 [${selectedCategoryFilters[0]}] 지출 추이`
+                  : `2026년 월별 선택 카테고리 지출 추이 (${selectedCategoryFilters.length}개 선택)`}
               </span>
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              {selectedCategoryFilter
-                ? `현재 '${selectedCategoryFilter}' 카테고리만 필터링하여 월별 지출을 표시하고 있습니다.`
-                : '카테고리를 누르면 해당 카테고리만의 월별 추이가 그래프에 표시됩니다.'}
+              {selectedCategoryFilters.length === 0
+                ? '하단 카테고리를 클릭하면 여러 카테고리를 동시에 선택하여 비교할 수 있습니다.'
+                : selectedCategoryFilters.length === 1
+                ? `현재 '${selectedCategoryFilters[0]}' 카테고리를 필터링 중입니다. 다른 카테고리를 추가로 클릭하면 멀티 비교가 가능합니다.`
+                : `현재 ${selectedCategoryFilters.join(', ')} (${selectedCategoryFilters.length}개) 카테고리를 멀티 비교 중입니다.`}
             </p>
           </div>
 
           <div className="flex items-center flex-wrap gap-2">
-            {/* View Mode Toggle (Active when no single category filter) */}
-            {!selectedCategoryFilter ? (
+            {/* View Mode Toggle (Active when no category filters selected) */}
+            {selectedCategoryFilters.length === 0 ? (
               <div className="flex items-center p-1 bg-slate-100 rounded-xl border border-slate-200/80">
                 <button
                   type="button"
                   onClick={() => setChartViewMode('category')}
-                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
                     chartViewMode === 'category'
                       ? 'bg-white text-indigo-700 shadow-2xs'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  <Tag className="w-3.5 h-3.5" />
+                  <Tag className="w-3.5 h-3.5 shrink-0" />
                   <span>카테고리별 보기</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setChartViewMode('spendingType')}
-                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer ${
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
                     chartViewMode === 'spendingType'
                       ? 'bg-white text-indigo-700 shadow-2xs'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  <Layers className="w-3.5 h-3.5" />
+                  <Layers className="w-3.5 h-3.5 shrink-0" />
                   <span>고정·일반·특별 구분</span>
                 </button>
               </div>
             ) : (
               <button
                 type="button"
-                onClick={() => setSelectedCategoryFilter(null)}
-                className="flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-300 transition cursor-pointer shadow-2xs"
+                onClick={() => setSelectedCategoryFilters([])}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-xl text-xs font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-300 transition cursor-pointer shadow-2xs whitespace-nowrap shrink-0"
                 title="카테고리 필터 해제하고 전체 지출 보기"
               >
-                <X className="w-3.5 h-3.5" />
+                <X className="w-3.5 h-3.5 shrink-0" />
                 <span>전체 지출 보기로 복원</span>
               </button>
             )}
 
-            <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200/80 shrink-0">
-              {selectedCategoryData ? (
-                <>연간 합계: {selectedCategoryData.total.toLocaleString('ko-KR')}원</>
+            <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200/80 shrink-0 whitespace-nowrap">
+              {selectedCategoriesData ? (
+                <>선택 합계: {selectedCategoriesData.total.toLocaleString('ko-KR')}원</>
               ) : (() => {
                 const maxVal = Math.max(...monthlyTotals, 0);
                 if (maxVal <= 0) return <>지출 집계 대기 중</>;
@@ -1185,30 +1204,42 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
           </div>
         </div>
 
-        {/* Active Category Filter Highlight Banner */}
-        {selectedCategoryData && (
+        {/* Active Multi-Category Filter Highlight Banner */}
+        {selectedCategoriesData && (
           <div className="mb-3 p-2.5 px-3 bg-indigo-50/90 border border-indigo-200 rounded-xl flex items-center justify-between gap-3 text-xs animate-in fade-in duration-150 flex-wrap">
-            <div className="flex items-center gap-2 min-w-0">
-              <span
-                className="w-3.5 h-3.5 rounded-full shadow-2xs shrink-0 ring-2 ring-white"
-                style={{ backgroundColor: selectedCategoryData.color }}
-              />
-              <span className="font-black text-indigo-950">
-                선택된 카테고리: <strong className="underline underline-offset-2">{selectedCategoryData.category}</strong>
+            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+              <span className="font-black text-indigo-950 whitespace-nowrap mr-1">
+                선택된 카테고리 ({selectedCategoriesData.filters.length}개):
               </span>
-              <span className="text-indigo-700 font-semibold text-[11px] hidden sm:inline">
-                (연간 총 {selectedCategoryData.total.toLocaleString('ko-KR')}원 • 월평균 약 {selectedCategoryData.avg.toLocaleString('ko-KR')}원)
+              {selectedCategoriesData.filters.map((catName) => {
+                const color = categoryColorMap[catName] || '#6366F1';
+                return (
+                  <button
+                    key={catName}
+                    type="button"
+                    onClick={() => handleToggleCategoryFilter(catName)}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-white border border-indigo-200 text-indigo-900 font-bold text-xs shadow-2xs cursor-pointer hover:bg-rose-50 hover:border-rose-300 hover:text-rose-700 transition whitespace-nowrap shrink-0 group"
+                    title={`클릭하여 '${catName}' 선택 해제`}
+                  >
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                    <span>{catName}</span>
+                    <X className="w-3 h-3 text-slate-400 group-hover:text-rose-600 shrink-0" />
+                  </button>
+                );
+              })}
+              <span className="text-indigo-700 font-semibold text-[11px] hidden sm:inline ml-1 whitespace-nowrap">
+                (연간 총 {selectedCategoriesData.total.toLocaleString('ko-KR')}원 • 월평균 {selectedCategoriesData.avg.toLocaleString('ko-KR')}원)
               </span>
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
-                onClick={() => setSelectedCategoryFilter(null)}
-                className="flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-indigo-100 text-indigo-800 font-bold rounded-lg border border-indigo-300 shadow-2xs transition cursor-pointer text-xs"
+                onClick={() => setSelectedCategoryFilters([])}
+                className="flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-indigo-100 text-indigo-800 font-bold rounded-lg border border-indigo-300 shadow-2xs transition cursor-pointer text-xs whitespace-nowrap shrink-0"
               >
-                <X className="w-3.5 h-3.5" />
-                <span>필터 해제</span>
+                <X className="w-3.5 h-3.5 shrink-0" />
+                <span>선택 초기화</span>
               </button>
             </div>
           </div>
@@ -1218,31 +1249,34 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
         <div className="overflow-x-auto pb-2 pt-2 scrollbar-none">
           <div className="min-w-[520px] sm:min-w-0 grid grid-cols-12 gap-1.5 sm:gap-2.5 items-end h-44 sm:h-48">
             {months.map((m, idx) => {
-              // 1. Single Category Mode
-              if (selectedCategoryData) {
-                const catAmt = selectedCategoryData.monthlyAmts[idx] || 0;
-                const max = selectedCategoryData.max || 1;
+              // 1. Filtered Categories Mode (Multi or Single Category)
+              if (selectedCategoriesData) {
+                const monthCats = selectedCategoriesData.categories
+                  .filter((c) => (c.monthly[idx] || 0) > 0)
+                  .sort((a, b) => (b.monthly[idx] || 0) - (a.monthly[idx] || 0));
+                const catAmt = selectedCategoriesData.monthlyAmts[idx] || 0;
+                const max = selectedCategoriesData.max || 1;
                 const heightPercent = catAmt > 0 ? Math.max(Math.round((catAmt / max) * 100), 8) : 0;
-                const isMax = catAmt > 0 && catAmt === Math.max(...selectedCategoryData.monthlyAmts);
+                const isMax = catAmt > 0 && catAmt === Math.max(...selectedCategoriesData.monthlyAmts);
 
                 return (
                   <button
                     key={m}
                     type="button"
                     onClick={() => {
-                      if (catAmt > 0) {
+                      if (monthCats.length === 1) {
                         setSelectedCellDetail({
-                          category: selectedCategoryData.category,
+                          category: monthCats[0].category,
                           monthNumber: idx + 1,
                           monthName: m,
-                          amount: catAmt,
+                          amount: monthCats[0].monthly[idx] || 0,
                         });
                       } else if (onSelectMonth) {
                         onSelectMonth(m);
                       }
                     }}
                     className="group flex flex-col items-center h-full justify-end cursor-pointer transition active:scale-95"
-                    title={`${m} ${selectedCategoryData.category}: ${catAmt.toLocaleString('ko-KR')}원\n클릭하여 상세 내역 확인 및 수정`}
+                    title={`${m} 선택 항목 합계: ${catAmt.toLocaleString('ko-KR')}원\n클릭하여 상세 내역 확인`}
                   >
                     <span
                       className={`text-[10px] font-bold mb-1 transition truncate max-w-full ${
@@ -1258,12 +1292,32 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
                     <div className="w-full bg-slate-100 rounded-t-lg overflow-hidden flex flex-col justify-end h-28 sm:h-32 group-hover:bg-slate-200/70 transition p-0.5">
                       {catAmt > 0 ? (
                         <div
-                          style={{
-                            height: `${heightPercent}%`,
-                            backgroundColor: selectedCategoryData.color,
-                          }}
-                          className="w-full rounded-t-md transition-all duration-300 shadow-2xs hover:opacity-85"
-                        />
+                          style={{ height: `${heightPercent}%` }}
+                          className="w-full rounded-t-md overflow-hidden flex flex-col-reverse justify-start transition-all duration-300 shadow-2xs"
+                        >
+                          {monthCats.map((cat) => {
+                            const sliceAmt = cat.monthly[idx] || 0;
+                            const slicePct = (sliceAmt / catAmt) * 100;
+                            const color = categoryColorMap[cat.category] || '#3B82F6';
+                            return (
+                              <div
+                                key={cat.category}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedCellDetail({
+                                    category: cat.category,
+                                    monthNumber: idx + 1,
+                                    monthName: m,
+                                    amount: sliceAmt,
+                                  });
+                                }}
+                                style={{ height: `${slicePct}%`, backgroundColor: color }}
+                                className="w-full transition-opacity hover:opacity-85 cursor-pointer"
+                                title={`${m} ${cat.category}: ${sliceAmt.toLocaleString('ko-KR')}원 (${Math.round(slicePct)}%)\n클릭하여 상세 내역 확인 및 수정`}
+                              />
+                            );
+                          })}
+                        </div>
                       ) : (
                         <div className="w-full h-1 bg-slate-300 rounded-full" />
                       )}
@@ -1393,9 +1447,9 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
           {/* All categories reset pill */}
           <button
             type="button"
-            onClick={() => setSelectedCategoryFilter(null)}
-            className={`px-2 py-0.5 rounded-md text-[11px] font-bold border transition cursor-pointer ${
-              selectedCategoryFilter === null
+            onClick={() => setSelectedCategoryFilters([])}
+            className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition cursor-pointer whitespace-nowrap shrink-0 ${
+              selectedCategoryFilters.length === 0
                 ? 'bg-indigo-600 text-white border-indigo-700 shadow-2xs'
                 : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
             }`}
@@ -1404,38 +1458,36 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
           </button>
 
           {topCategoriesForLegend.map((cat) => {
-            const isSelected = selectedCategoryFilter === cat.category;
+            const isSelected = selectedCategoryFilters.includes(cat.category);
             const color = categoryColorMap[cat.category] || '#94A3B8';
 
             return (
               <button
                 key={cat.category}
                 type="button"
-                onClick={() => {
-                  setSelectedCategoryFilter((prev) => (prev === cat.category ? null : cat.category));
-                }}
-                className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md border text-[11px] transition cursor-pointer ${
+                onClick={() => handleToggleCategoryFilter(cat.category)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs transition cursor-pointer whitespace-nowrap shrink-0 ${
                   isSelected
                     ? 'bg-indigo-100 text-indigo-950 font-black border-indigo-400 ring-2 ring-indigo-500/30 shadow-2xs'
                     : 'bg-slate-50 text-slate-700 font-semibold border-slate-200/80 hover:bg-indigo-50 hover:border-indigo-200'
                 }`}
-                title={`클릭하여 '${cat.category}' 카테고리만 월별 그래프에 보기`}
+                title={`클릭하여 '${cat.category}' 멀티 선택/해제`}
               >
                 <span
                   className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs"
                   style={{ backgroundColor: color }}
                 />
-                <span>{cat.category}</span>
+                <span className="whitespace-nowrap">{cat.category}</span>
                 <span className="text-[10px] text-slate-500 font-mono">
                   {(cat.annualTotal / 10000).toFixed(0)}만
                 </span>
-                {isSelected && <Check className="w-3 h-3 text-indigo-600 stroke-[3]" />}
+                {isSelected && <Check className="w-3 h-3 text-indigo-600 stroke-[3] shrink-0" />}
               </button>
             );
           })}
 
-          <span className="text-[11px] text-slate-400 ml-auto hidden md:inline-block">
-            💡 카테고리를 클릭하면 해당 카테고리만 그래프에 집중 표시됩니다
+          <span className="text-[11px] text-slate-400 ml-auto hidden md:inline-block whitespace-nowrap shrink-0">
+            💡 카테고리를 여러 개 클릭하면 멀티 선택하여 함께 비교할 수 있습니다
           </span>
         </div>
       </div>
@@ -1500,11 +1552,9 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
                   <td className="py-2.5 px-3 font-bold text-slate-900 sticky left-0 bg-white hover:bg-blue-50/70 z-10 border-r border-slate-200">
                     <button
                       type="button"
-                      onClick={() => {
-                        setSelectedCategoryFilter((prev) => (prev === cat.category ? null : cat.category));
-                      }}
-                      className="flex items-center gap-1.5 text-left hover:text-indigo-600 transition cursor-pointer min-w-0"
-                      title={`클릭하여 상단 그래프에서 [${cat.category}] 추이만 보기`}
+                      onClick={() => handleToggleCategoryFilter(cat.category)}
+                      className="flex items-center gap-1.5 text-left hover:text-indigo-600 transition cursor-pointer min-w-0 whitespace-nowrap shrink-0"
+                      title={`클릭하여 상단 그래프에서 [${cat.category}] 멀티 선택/해제`}
                     >
                       <span
                         className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs"
@@ -1512,14 +1562,14 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
                       />
                       <span
                         className={`truncate ${
-                          selectedCategoryFilter === cat.category ? 'text-indigo-700 font-black' : ''
+                          selectedCategoryFilters.includes(cat.category) ? 'text-indigo-700 font-black' : ''
                         }`}
                       >
                         {cat.category}
                       </span>
-                      {selectedCategoryFilter === cat.category && (
-                        <span className="text-[10px] bg-indigo-100 text-indigo-700 font-bold px-1 rounded shrink-0">
-                          그래프 보기중
+                      {selectedCategoryFilters.includes(cat.category) && (
+                        <span className="text-[10px] bg-indigo-100 text-indigo-700 font-bold px-1.5 py-0.2 rounded shrink-0 whitespace-nowrap">
+                          선택됨
                         </span>
                       )}
                     </button>

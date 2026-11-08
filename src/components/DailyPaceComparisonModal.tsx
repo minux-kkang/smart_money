@@ -435,10 +435,10 @@ export const DailyPaceComparisonModal: React.FC<DailyPaceComparisonModalProps> =
   const [hoveredDay, setHoveredDay] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
 
-  // SVG dimensions
-  const svgWidth = 720;
-  const svgHeight = 280;
-  const padding = { top: 25, right: 30, bottom: 35, left: 75 };
+  // SVG dimensions - tightened so it fits perfectly on mobile screens without horizontal scrolling
+  const svgWidth = 460;
+  const svgHeight = 220;
+  const padding = { top: 18, right: 14, bottom: 26, left: 46 };
   const plotWidth = svgWidth - padding.left - padding.right;
   const plotHeight = svgHeight - padding.top - padding.bottom;
 
@@ -649,11 +649,11 @@ export const DailyPaceComparisonModal: React.FC<DailyPaceComparisonModalProps> =
           {/* 2. Controls & Past Month Toggles */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-50/90 rounded-2xl border border-slate-200">
             {/* View Mode Toggle */}
-            <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 shadow-2xs">
+            <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200 shadow-2xs shrink-0">
               <button
                 type="button"
                 onClick={() => setViewMode('cumulative')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer whitespace-nowrap shrink-0 ${
                   viewMode === 'cumulative'
                     ? 'bg-blue-600 text-white shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
@@ -664,7 +664,7 @@ export const DailyPaceComparisonModal: React.FC<DailyPaceComparisonModalProps> =
               <button
                 type="button"
                 onClick={() => setViewMode('daily')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer ${
+                className={`px-3 py-1.5 rounded-lg text-xs font-black transition cursor-pointer whitespace-nowrap shrink-0 ${
                   viewMode === 'daily'
                     ? 'bg-blue-600 text-white shadow-2xs'
                     : 'text-slate-600 hover:text-slate-900'
@@ -741,12 +741,12 @@ export const DailyPaceComparisonModal: React.FC<DailyPaceComparisonModalProps> =
               )}
             </div>
 
-            {/* SVG Chart Area */}
-            <div className="w-full overflow-x-auto">
+            {/* SVG Chart Area - Completely responsive without horizontal scrolling */}
+            <div className="w-full overflow-hidden">
               <svg
                 ref={svgRef}
                 viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-                className="w-full h-auto min-w-[580px] select-none cursor-crosshair"
+                className="w-full h-auto select-none cursor-crosshair touch-none"
                 onPointerMove={handlePointerMove}
                 onPointerLeave={handlePointerLeave}
               >
@@ -780,10 +780,10 @@ export const DailyPaceComparisonModal: React.FC<DailyPaceComparisonModalProps> =
                         strokeWidth="1"
                       />
                       <text
-                        x={padding.left - 8}
-                        y={y + 4}
+                        x={padding.left - 6}
+                        y={y + 3.5}
                         textAnchor="end"
-                        fontSize="10"
+                        fontSize="9"
                         fontWeight="600"
                         fill="#64748b"
                       >
@@ -791,14 +791,14 @@ export const DailyPaceComparisonModal: React.FC<DailyPaceComparisonModalProps> =
                           ? `${Math.round(val / 10000)}만`
                           : val >= 10000
                           ? `${Math.round(val / 10000)}만`
-                          : val.toLocaleString('ko-KR')}원
+                          : val.toLocaleString('ko-KR')}
                       </text>
                     </g>
                   );
                 })}
 
-                {/* X-Axis Vertical Day Markers */}
-                {[1, 5, 10, 15, 20, 25, 30, 31].map((day) => {
+                {/* X-Axis Vertical Day Markers (Tightened intervals fitting phone width) */}
+                {[1, 5, 10, 15, 20, 25, 31].map((day) => {
                   const x = getX(day);
                   return (
                     <g key={day}>
@@ -812,9 +812,9 @@ export const DailyPaceComparisonModal: React.FC<DailyPaceComparisonModalProps> =
                       />
                       <text
                         x={x}
-                        y={padding.top + plotHeight + 18}
+                        y={padding.top + plotHeight + 15}
                         textAnchor="middle"
-                        fontSize="11"
+                        fontSize="9"
                         fontWeight="700"
                         fill={day === comparisonDay ? '#2563eb' : '#64748b'}
                       >
