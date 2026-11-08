@@ -41,6 +41,7 @@ import {
   CloudUpload,
   Copy,
   ClipboardPaste,
+  LineChart,
 } from 'lucide-react';
 
 
@@ -56,6 +57,8 @@ import {
 } from '../types/ledger';
 import { SubItemModal } from './SubItemModal';
 import { CopyPasteModal } from './CopyPasteModal';
+import { DailyPaceComparisonModal } from './DailyPaceComparisonModal';
+import { YearDashboardData } from '../data/userLedgerData';
 import { saveSubItemsForTransaction, serializeSubItemsToMemo } from '../services/subItemStorage';
 import {
   getSmartUsageFrequencyMap,
@@ -97,6 +100,9 @@ interface DashboardProps {
   }) => Promise<void>;
   onBatchUpdateCategory?: (transactions: Transaction[], newCategory: string) => Promise<void>;
   onOpenQuickImportModal?: () => void;
+  spreadsheetId?: string | null;
+  onFetchMonthTransactions?: (monthNum: number) => Promise<Transaction[]>;
+  yearData?: YearDashboardData;
 }
 
 export function extractMonthFromDate(dateStr?: string, sheetTitle?: string): number | null {
@@ -174,7 +180,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onBatchCopyPaste,
   onBatchUpdateCategory,
   onOpenQuickImportModal,
+  spreadsheetId,
+  onFetchMonthTransactions,
+  yearData,
 }) => {
+  // Daily Pace Comparison Modal state (User request: 11월 총 지출 클릭 시 지난 달들과 일자별 지출 비교 그래프)
+  const [isDailyPaceModalOpen, setIsDailyPaceModalOpen] = useState<boolean>(false);
+
   // Copy & Paste Modal state
   const [isCopyModalOpen, setIsCopyModalOpen] = useState<boolean>(false);
   const [transactionsToCopy, setTransactionsToCopy] = useState<Transaction[]>([]);
@@ -1578,13 +1590,21 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
         {/* 2 Key Pillars: 총 지출 & 총 수입 */}
         <div className="grid grid-cols-2 divide-x divide-slate-150 bg-slate-50/80 py-2.5 px-1 sm:px-3">
-          {/* 지출 */}
-          <div className="px-2.5 sm:px-4 py-1 flex items-center justify-between min-w-0">
+          {/* 지출 (Click to open Daily Pace Comparison Graph) */}
+          <div
+            onClick={() => setIsDailyPaceModalOpen(true)}
+            className="px-2.5 sm:px-4 py-1 flex items-center justify-between min-w-0 cursor-pointer rounded-xl hover:bg-rose-50/80 active:scale-[0.98] transition group border border-transparent hover:border-rose-200"
+            title="클릭하여 지난 달들과 일자별 지출 비교 그래프 보기 (특별 지출 제외)"
+          >
             <div className="min-w-0">
               <div className="flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
-                <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">
+                <span className="text-[11px] sm:text-xs font-bold text-slate-500 group-hover:text-rose-700 truncate">
                   {activeSheetTitle} {excludeSpecialExpense ? '일상 총 지출 (특별 제외)' : '총 지출'}
+                </span>
+                <span className="inline-flex items-center gap-0.5 text-[9px] font-extrabold text-rose-600 bg-rose-100 group-hover:bg-rose-200 px-1.5 py-0.5 rounded-full transition ml-0.5 shrink-0">
+                  <LineChart className="w-2.5 h-2.5" />
+                  <span>일자별 비교</span>
                 </span>
               </div>
               <p className="text-sm sm:text-lg font-black text-rose-600 truncate mt-0.5">
@@ -1596,7 +1616,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </span>
               )}
             </div>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 ml-1.5 shadow-2xs">
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-rose-100 group-hover:bg-rose-200 text-rose-600 flex items-center justify-center shrink-0 ml-1.5 shadow-2xs transition group-hover:scale-105">
               <TrendingDown className="w-4 h-4 stroke-[2.5]" />
             </div>
           </div>
@@ -4681,6 +4701,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* 9. Daily Pace Comparison Modal (Click 11월 총 지출 card) */}
+      <DailyPaceComparisonModal
+        isOpen={isDailyPaceModalOpen}
+        onClose={() => setIsDailyPaceModalOpen(false)}
+        currentMonthTransactions={transactions}
+        activeSheetTitle={activeSheetTitle}
+        spreadsheetId={spreadsheetId}
+        onFetchMonthTransactions={onFetchMonthTransactions}
+        yearData={yearData}
+        onSelectSheetTab={onSelectSheetTab}
+      />
     </div>
 
   );

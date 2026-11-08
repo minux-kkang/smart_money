@@ -2478,6 +2478,9 @@ export default function App() {
                 setOpenImportOnModal(true);
                 setIsInputModalOpen(true);
               }}
+              spreadsheetId={spreadsheetId}
+              onFetchMonthTransactions={handleFetchMonthTransactions}
+              yearData={yearData}
             />
           ) : (
             <SpreadsheetAnalyzer
