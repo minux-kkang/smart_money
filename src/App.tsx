@@ -2419,12 +2419,6 @@ export default function App() {
               <span>시트 분석</span>
             </button>
           </div>
-
-          {/* Current Sheet Info */}
-          <div className="flex items-center justify-end gap-1 text-[11px] text-slate-500 font-semibold">
-            <span className="text-slate-400">조회 중:</span>
-            <span className="font-bold text-slate-700">{activeSheetTitle}</span>
-          </div>
         </div>
 
         {/* Full Width Main Display Area */}

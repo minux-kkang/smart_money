@@ -1620,67 +1620,69 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
         </div>
 
-        {/* 3-Way Expense Breakdown Sub-bar with 1-Click Toggle */}
-        <div className="px-3 sm:px-4 py-2.5 bg-slate-100/70 border-t border-slate-200/80 flex flex-wrap items-center justify-between gap-2.5 text-xs">
-          <div className="flex items-center gap-3 flex-wrap">
-            <span className="text-[11px] font-black text-slate-600 flex items-center gap-1">
-              <span>지출 유형 분석:</span>
-            </span>
+        {/* 3-Way Expense Breakdown Sub-bar (2-row compact layout) */}
+        <div className="px-3 sm:px-4 py-2.5 bg-slate-100/70 border-t border-slate-200/80 space-y-2 text-xs">
+          {/* Row 1: 3-column equal split for spending types */}
+          <div className="grid grid-cols-3 gap-1.5 sm:gap-2 text-center">
+            {/* Col 1: Recurring */}
             <button
               type="button"
               onClick={() => setSelectedSpendingTypeDetail('recurring')}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-purple-100/80 active:scale-95 transition cursor-pointer text-left group"
+              className="p-1.5 sm:p-2 rounded-xl bg-white/90 hover:bg-purple-50 border border-purple-200/60 shadow-2xs transition cursor-pointer text-center group flex flex-col items-center justify-center min-w-0"
               title="클릭하여 고정 예산 상세 내역 모아보기"
             >
-              <span className="w-2 h-2 rounded-full bg-purple-500 group-hover:scale-125 transition shrink-0" />
-              <span className="font-bold text-slate-700 text-[11px] group-hover:text-purple-950">
-                📌 고정 예산:{' '}
-                <strong className="text-purple-700 font-black">
-                  {metrics.recurringExpense.toLocaleString('ko-KR')}원
-                </strong>
-                <span className="text-[10px] text-purple-600 ml-0.5">({metrics.recurringRate}%)</span>
-              </span>
+              <div className="flex items-center gap-1 text-[11px] font-bold text-slate-700 group-hover:text-purple-900 truncate">
+                <span className="w-1.5 h-1.5 rounded-full bg-purple-500 shrink-0" />
+                <span className="truncate">📌 고정 예산</span>
+              </div>
+              <div className="text-[11px] sm:text-xs font-black text-purple-700 mt-0.5 truncate w-full">
+                {metrics.recurringExpense.toLocaleString('ko-KR')}원
+                <span className="text-[10px] font-bold text-purple-600/80 ml-0.5 sm:ml-1">({metrics.recurringRate}%)</span>
+              </div>
             </button>
 
+            {/* Col 2: Routine */}
             <button
               type="button"
               onClick={() => setSelectedSpendingTypeDetail('routine')}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-rose-100/80 active:scale-95 transition cursor-pointer text-left group"
+              className="p-1.5 sm:p-2 rounded-xl bg-white/90 hover:bg-rose-50 border border-rose-200/60 shadow-2xs transition cursor-pointer text-center group flex flex-col items-center justify-center min-w-0"
               title="클릭하여 일반 일상 지출 상세 내역 모아보기"
             >
-              <span className="w-2 h-2 rounded-full bg-rose-400 group-hover:scale-125 transition shrink-0" />
-              <span className="font-bold text-slate-700 text-[11px] group-hover:text-rose-950">
-                🛒 일반 일상 지출:{' '}
-                <strong className="text-slate-900 font-black">
-                  {metrics.routineExpense.toLocaleString('ko-KR')}원
-                </strong>
-                <span className="text-[10px] text-slate-500 ml-0.5">({metrics.routineRate}%)</span>
-              </span>
+              <div className="flex items-center gap-1 text-[11px] font-bold text-slate-700 group-hover:text-rose-900 truncate">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-400 shrink-0" />
+                <span className="truncate">🛒 일반 일상</span>
+              </div>
+              <div className="text-[11px] sm:text-xs font-black text-slate-900 mt-0.5 truncate w-full">
+                {metrics.routineExpense.toLocaleString('ko-KR')}원
+                <span className="text-[10px] font-bold text-slate-500 ml-0.5 sm:ml-1">({metrics.routineRate}%)</span>
+              </div>
             </button>
 
+            {/* Col 3: Special */}
             <button
               type="button"
               onClick={() => setSelectedSpendingTypeDetail('special')}
-              className="flex items-center gap-1.5 px-2 py-1 rounded-lg hover:bg-amber-100/80 active:scale-95 transition cursor-pointer text-left group"
+              className="p-1.5 sm:p-2 rounded-xl bg-white/90 hover:bg-amber-50 border border-amber-200/60 shadow-2xs transition cursor-pointer text-center group flex flex-col items-center justify-center min-w-0"
               title="클릭하여 특별(비정기) 지출 상세 내역 모아보기"
             >
-              <span className="w-2 h-2 rounded-full bg-amber-500 group-hover:scale-125 transition shrink-0" />
-              <span className="font-bold text-slate-700 text-[11px] group-hover:text-amber-950">
-                🛋️ 특별(비정기) 지출:{' '}
-                <strong className="text-amber-800 font-black">
-                  {metrics.specialExpense.toLocaleString('ko-KR')}원
-                </strong>
-                <span className="text-[10px] text-amber-700 ml-0.5">({metrics.specialRate}%)</span>
-              </span>
+              <div className="flex items-center gap-1 text-[11px] font-bold text-slate-700 group-hover:text-amber-900 truncate">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+                <span className="truncate">🛋️ 특별(비정기)</span>
+              </div>
+              <div className="text-[11px] sm:text-xs font-black text-amber-800 mt-0.5 truncate w-full">
+                {metrics.specialExpense.toLocaleString('ko-KR')}원
+                <span className="text-[10px] font-bold text-amber-600 ml-0.5 sm:ml-1">({metrics.specialRate}%)</span>
+              </div>
             </button>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0 ml-auto">
+          {/* Row 2: 1-Click Toggle & Proportion Progress Bar */}
+          <div className="flex items-center justify-between gap-2 pt-0.5">
             {/* 1-Click Toggle: Exclude / Include Special Expenses */}
             <button
               type="button"
               onClick={() => setExcludeSpecialExpense((prev) => !prev)}
-              className={`px-2.5 py-1 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 border shadow-2xs whitespace-nowrap ${
+              className={`px-2.5 py-1 rounded-xl text-xs font-black transition cursor-pointer flex items-center gap-1.5 border shadow-2xs whitespace-nowrap shrink-0 ${
                 excludeSpecialExpense
                   ? 'bg-amber-500 text-white border-amber-600 hover:bg-amber-600'
                   : 'bg-white hover:bg-slate-50 border-slate-300 text-slate-700'
@@ -1700,26 +1702,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
             {/* Proportion Progress Bar (Purple, Rose, Amber) */}
             {metrics.totalExpense > 0 && (
               <div
-                className="w-28 sm:w-36 h-2 bg-slate-200 rounded-full overflow-hidden flex shrink-0 cursor-pointer shadow-2xs"
+                className="flex-1 max-w-[180px] sm:max-w-xs h-2.5 bg-slate-200 rounded-full overflow-hidden flex shrink-0 cursor-pointer shadow-2xs"
                 title="클릭하여 지출 유형별 상세 내역 모아보기"
               >
                 <div
                   style={{ width: `${metrics.recurringRate}%` }}
                   onClick={() => setSelectedSpendingTypeDetail('recurring')}
                   className="bg-purple-600 h-full hover:opacity-75 transition cursor-pointer"
-                  title={`클릭하여 고정 예산 내역 모아보기: ${metrics.recurringExpense.toLocaleString('ko-KR')}원 (${metrics.recurringRate}%)`}
+                  title={`고정 예산: ${metrics.recurringExpense.toLocaleString('ko-KR')}원 (${metrics.recurringRate}%)`}
                 />
                 <div
                   style={{ width: `${metrics.routineRate}%` }}
                   onClick={() => setSelectedSpendingTypeDetail('routine')}
                   className="bg-rose-400 h-full hover:opacity-75 transition cursor-pointer"
-                  title={`클릭하여 일반 일상 지출 내역 모아보기: ${metrics.routineExpense.toLocaleString('ko-KR')}원 (${metrics.routineRate}%)`}
+                  title={`일반 일상 지출: ${metrics.routineExpense.toLocaleString('ko-KR')}원 (${metrics.routineRate}%)`}
                 />
                 <div
                   style={{ width: `${metrics.specialRate}%` }}
                   onClick={() => setSelectedSpendingTypeDetail('special')}
                   className="bg-amber-500 h-full hover:opacity-75 transition cursor-pointer"
-                  title={`클릭하여 특별 지출 내역 모아보기: ${metrics.specialExpense.toLocaleString('ko-KR')}원 (${metrics.specialRate}%)`}
+                  title={`특별 지출: ${metrics.specialExpense.toLocaleString('ko-KR')}원 (${metrics.specialRate}%)`}
                 />
               </div>
             )}
@@ -1734,13 +1736,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
         {isCategoryRankCollapsed ? (
           <div
             onClick={() => setIsCategoryRankCollapsed(false)}
-            className="col-span-1 lg:col-span-3 p-3 sm:p-3.5 bg-white rounded-2xl border-2 border-slate-200 shadow-2xs flex items-center justify-between cursor-pointer hover:bg-slate-50 hover:border-blue-300 transition group"
+            className="col-span-1 lg:col-span-3 p-3 sm:p-3.5 bg-white rounded-2xl border-2 border-slate-200 shadow-2xs flex items-center justify-between cursor-pointer hover:bg-slate-50 hover:border-blue-300 transition group gap-2"
             title="클릭하여 카테고리별 지출 순위 펼치기"
           >
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1">
               <Tag className="w-4 h-4 text-blue-600 shrink-0" />
-              <span className="text-xs sm:text-sm font-black text-slate-900">카테고리별 지출 순위</span>
-              <span className="text-[11px] font-bold text-slate-500 truncate">
+              <span className="text-xs sm:text-sm font-black text-slate-900 whitespace-nowrap shrink-0">카테고리별 지출 순위</span>
+              <span className="text-[11px] font-bold text-slate-500 truncate min-w-0 flex-1">
                 (총 {categoryStats.list.length}개 분류 · 합계 {categoryStats.totalExpense.toLocaleString('ko-KR')}원)
               </span>
             </div>
@@ -1750,7 +1752,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 e.stopPropagation();
                 setIsCategoryRankCollapsed(false);
               }}
-              className="flex items-center gap-1 text-xs font-bold text-blue-600 group-hover:text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg transition shrink-0"
+              className="flex items-center gap-1 text-xs font-bold text-blue-600 group-hover:text-blue-700 bg-blue-50 px-2 sm:px-2.5 py-1 rounded-lg transition shrink-0 whitespace-nowrap"
             >
               <span>순위 펼치기</span>
               <ChevronDown className="w-3.5 h-3.5" />
@@ -1760,8 +1762,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
           <div className="lg:col-span-1 p-5 sm:p-6 bg-white rounded-2xl border-2 border-slate-200 shadow-sm flex flex-col">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200">
               <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
-                <Tag className="w-4 h-4 text-blue-600" />
-                <span>카테고리별 지출 순위</span>
+                <Tag className="w-4 h-4 text-blue-600 shrink-0" />
+                <span className="whitespace-nowrap shrink-0">카테고리별 지출 순위</span>
               </h3>
               <div className="flex items-center gap-1.5">
                 <span className="text-xs font-bold text-slate-500">
