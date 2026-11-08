@@ -1842,7 +1842,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <div
           className={`${
             isCategoryRankCollapsed ? 'lg:col-span-3' : 'lg:col-span-2'
-          } p-3.5 sm:p-5 bg-white rounded-2xl border-2 border-slate-200 shadow-sm flex flex-col relative transition-all duration-200`}
+          } p-3.5 sm:p-5 bg-white rounded-2xl border-2 border-slate-200 shadow-sm flex flex-col relative transition-all duration-200 w-full max-w-full overflow-hidden`}
         >
           {/* 1. Compact Table Header and Actions */}
           <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-200">
@@ -1963,9 +1963,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
           {/* 3. High-Efficiency Compact Search & Filters */}
           <div className="py-2 space-y-1.5">
             {/* Row 1: Search + Type + Sort + Selection */}
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 w-full">
               {/* Search input with quick clear */}
-              <div className="relative flex-1 min-w-[120px]">
+              <div className="relative flex-1 min-w-0">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
@@ -2068,19 +2068,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <CheckSquare className="w-3.5 h-3.5" />
                 <span>{isSelectionMode ? '선택 취소' : '선택'}</span>
               </button>
-
-              {/* Previous Month Fixed Expenses Quick Import Button */}
-              {onOpenQuickImportModal && (
-                <button
-                  type="button"
-                  onClick={onOpenQuickImportModal}
-                  className="px-2.5 py-1.5 border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs font-black flex items-center gap-1.5 cursor-pointer transition whitespace-nowrap shrink-0 shadow-2xs active:scale-95"
-                  title="지난달 고정지출(관리비, 통신비, 보험, 구독 등)을 1초 만에 불러와 이번 달에 등록합니다"
-                >
-                  <Repeat className="w-3.5 h-3.5 text-indigo-600" />
-                  <span>⚡ 지난달 고정지출 불러오기</span>
-                </button>
-              )}
             </div>
 
             {/* Row 2: Smooth Horizontal Scrollable Filter Chips (never wraps to 3rd or 4th row!) */}
