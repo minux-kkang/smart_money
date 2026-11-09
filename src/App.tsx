@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { User } from 'firebase/auth';
 import {
   initAuth,
@@ -358,40 +358,9 @@ export default function App() {
 
   const activeYear = useMemo(() => {
     const match = spreadsheetTitle?.match(/20\d{2}/) || activeSheetTitle?.match(/20\d{2}/);
-    return match ? (typeof match === 'string' ? match : match[0]) : '2026';
+    if (!match) return '2026';
+    return typeof match === 'string' ? match : match[0];
   }, [spreadsheetTitle, activeSheetTitle]);
-
-  const handleSelectYearSheet = useCallback(async (cfg: { year: string; title: string; id: string; url?: string }) => {
-    if (!cfg.id) return;
-    setSpreadsheetId(cfg.id);
-    setSpreadsheetTitle(cfg.title);
-    setSpreadsheetUrl(cfg.url || `https://docs.google.com/spreadsheets/d/${cfg.id}`);
-    try {
-      localStorage.setItem('smart_money_spreadsheet_id', cfg.id);
-      localStorage.setItem('smart_money_spreadsheet_title', cfg.title);
-    } catch {}
-    const curMonth = `${new Date().getMonth() + 1}월`;
-    const token = accessToken || getSavedToken() || null;
-    await loadSheetData(cfg.id, curMonth, token);
-  }, [accessToken]);
-
-  const handleRegisterYearSheet = useCallback(async (year: string, id: string, title: string) => {
-    const newConfig = {
-      year,
-      id,
-      title,
-      url: `https://docs.google.com/spreadsheets/d/${id}`,
-    };
-    setYearlySheets((prev) => {
-      const filtered = prev.filter((item) => item.year !== year && item.id !== id);
-      const updated = [...filtered, newConfig].sort((a, b) => b.year.localeCompare(a.year));
-      try {
-        localStorage.setItem('smart_money_yearly_sheets', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-    await handleSelectYearSheet(newConfig);
-  }, [handleSelectYearSheet]);
 
   // Floating Real-time Sync Toast Notification
   const [syncToast, setSyncToast] = useState<{
@@ -776,6 +745,44 @@ export default function App() {
     setAnalysis(SAMPLE_ANALYSIS);
     setTransactions(SAMPLE_TRANSACTIONS);
   };
+
+  const handleSelectYearSheet = useCallback(
+    async (cfg: { year: string; title: string; id: string; url?: string }) => {
+      if (!cfg.id) return;
+      setSpreadsheetId(cfg.id);
+      setSpreadsheetTitle(cfg.title);
+      setSpreadsheetUrl(cfg.url || `https://docs.google.com/spreadsheets/d/${cfg.id}`);
+      try {
+        localStorage.setItem('smart_money_spreadsheet_id', cfg.id);
+        localStorage.setItem('smart_money_spreadsheet_title', cfg.title);
+      } catch {}
+      const curMonth = `${new Date().getMonth() + 1}월`;
+      const token = accessToken || getSavedToken() || null;
+      await loadSheetData(cfg.id, curMonth, token);
+    },
+    [accessToken, loadSheetData]
+  );
+
+  const handleRegisterYearSheet = useCallback(
+    async (year: string, id: string, title: string) => {
+      const newConfig = {
+        year,
+        id,
+        title,
+        url: `https://docs.google.com/spreadsheets/d/${id}`,
+      };
+      setYearlySheets((prev) => {
+        const filtered = prev.filter((item) => item.year !== year && item.id !== id);
+        const updated = [...filtered, newConfig].sort((a, b) => b.year.localeCompare(a.year));
+        try {
+          localStorage.setItem('smart_money_yearly_sheets', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+      await handleSelectYearSheet(newConfig);
+    },
+    [handleSelectYearSheet]
+  );
 
   // Add Transaction Handler with Direct Real-time Google Sheets Sync
   const handleAddTransaction = async (
