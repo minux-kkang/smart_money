@@ -13,6 +13,7 @@ import {
   Download,
   MoreVertical,
   Tag,
+  Check,
 } from 'lucide-react';
 import { User } from 'firebase/auth';
 
@@ -33,6 +34,10 @@ interface HeaderProps {
   onOpenCategoryManager?: () => void;
   isRealGoogleConnected?: boolean;
   onOpenMigrationModal?: () => void;
+  activeYear?: string;
+  yearlySheets?: Array<{ year: string; title: string; id: string }>;
+  onSelectYearSheet?: (cfg: { year: string; title: string; id: string }) => void;
+  onOpenRegisterYearModal?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -52,16 +57,25 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenCategoryManager,
   isRealGoogleConnected = false,
   onOpenMigrationModal,
+  activeYear,
+  yearlySheets = [],
+  onSelectYearSheet,
+  onOpenRegisterYearModal,
 }) => {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [yearMenuOpen, setYearMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const yearMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
         setUserMenuOpen(false);
         setMoreMenuOpen(false);
+      }
+      if (yearMenuRef.current && !yearMenuRef.current.contains(e.target as Node)) {
+        setYearMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -81,6 +95,74 @@ export const Header: React.FC<HeaderProps> = ({
               <h1 className="font-black text-sm sm:text-base md:text-lg text-slate-900 tracking-tight whitespace-nowrap shrink-0">
                 스마트 가계부
               </h1>
+
+              {/* Year Switcher Dropdown (2026년 ▼, 2025년 ...) */}
+              <div className="relative" ref={yearMenuRef}>
+                <button
+                  type="button"
+                  onClick={() => setYearMenuOpen((prev) => !prev)}
+                  className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 text-xs font-black transition cursor-pointer whitespace-nowrap shrink-0 shadow-2xs"
+                  title="연도 전환 및 과거 연도 시트 관리"
+                >
+                  <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                  <span>{activeYear || '2026'}년</span>
+                  <ChevronDown className="w-3 h-3 text-blue-500 shrink-0" />
+                </button>
+
+                {yearMenuOpen && (
+                  <div className="absolute left-0 top-full mt-1.5 w-60 bg-white rounded-2xl shadow-xl border border-slate-200 py-1.5 z-50 animate-in fade-in zoom-in-95 duration-150">
+                    <div className="px-3 py-1 border-b border-slate-100 text-[10px] font-bold text-slate-400">
+                      연도별 가계부 시트
+                    </div>
+
+                    <div className="py-1 max-h-52 overflow-y-auto">
+                      {(yearlySheets && yearlySheets.length > 0
+                        ? yearlySheets
+                        : [{ year: activeYear || '2026', title: spreadsheetTitle, id: '' }]
+                      ).map((cfg) => {
+                        const isCurrent = cfg.year === (activeYear || '2026');
+                        return (
+                          <button
+                            key={cfg.year}
+                            type="button"
+                            onClick={() => {
+                              if (onSelectYearSheet) onSelectYearSheet(cfg);
+                              setYearMenuOpen(false);
+                            }}
+                            className={`w-full px-3 py-2 text-left flex items-center justify-between text-xs transition cursor-pointer ${
+                              isCurrent
+                                ? 'bg-blue-50 text-blue-900 font-black'
+                                : 'text-slate-700 hover:bg-slate-50 font-medium'
+                            }`}
+                          >
+                            <div className="min-w-0 pr-2">
+                              <span className="font-black text-slate-900 block">{cfg.year}년</span>
+                              <span className="text-[10px] text-slate-500 block truncate">
+                                {cfg.title}
+                              </span>
+                            </div>
+                            {isCurrent && <Check className="w-3.5 h-3.5 text-blue-600 shrink-0 stroke-[3]" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    <div className="px-2 pt-1 border-t border-slate-100">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setYearMenuOpen(false);
+                          if (onOpenRegisterYearModal) onOpenRegisterYearModal();
+                        }}
+                        className="w-full px-2.5 py-1.5 rounded-xl bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap"
+                      >
+                        <Plus className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                        <span>+ 다른 연도(2025 등) 시트 등록</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
 
               {/* Active Sheet Badge - Clickable to change sheet */}
               <button

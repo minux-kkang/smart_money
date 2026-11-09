@@ -74,6 +74,7 @@ interface ExpenseInputFormProps {
   sheetTabs?: Array<{ id: number; title: string }>;
   onFetchMonthTransactions?: (monthNum: number) => Promise<Transaction[]>;
   initialOpenImport?: boolean;
+  initialDate?: string;
 }
 
 export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
@@ -93,11 +94,66 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   sheetTabs = [],
   onFetchMonthTransactions,
   initialOpenImport = false,
+  initialDate,
 }) => {
   const [type, setType] = useState<TransactionType>('expense');
   const [amountStr, setAmountStr] = useState<string>('');
   const [splitSubItemsIntoSeparateTx, setSplitSubItemsIntoSeparateTx] = useState<boolean>(false);
-  const [date, setDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+
+  // User request: "월별 보기에서 다른 월 보고 있을 때 입력버튼 누르면 보고있는 월과 보고있는 일자(여러개중 상단)를 설정 바로 해줘. 다른달거 추가할때 편하게"
+  const computeSmartDefaultDate = (): string => {
+    if (initialDate && /^\d{4}-\d{2}-\d{2}$/.test(initialDate)) {
+      return initialDate;
+    }
+
+    // 1. Year (from spreadsheetTitle e.g. "2026_가계부" or activeSheetTitle or current calendar year)
+    const yearMatch = spreadsheetTitle?.match(/20\d{2}/) || activeSheetTitle?.match(/20\d{2}/);
+    const yearStr = yearMatch ? yearMatch[0] : String(new Date().getFullYear());
+
+    // 2. Month (from activeSheetTitle e.g. "10월" -> 10)
+    const mMatch = activeSheetTitle?.match(/(\d{1,2})월?/);
+    const viewedMonthNum = mMatch ? parseInt(mMatch[1], 10) : new Date().getMonth() + 1;
+    const monthStr = String(viewedMonthNum).padStart(2, '0');
+
+    // 3. Day: Look for topmost transaction in this viewed month
+    if (transactions && transactions.length > 0) {
+      const monthTxs = transactions.filter((t) => {
+        if (!t.date) return false;
+        const md = t.date.match(/^(?:20\d{2}[-.\/])?0*(\d{1,2})[-.\/]/);
+        if (md) {
+          return parseInt(md[1], 10) === viewedMonthNum;
+        }
+        return true;
+      });
+
+      if (monthTxs.length > 0) {
+        const topTx = monthTxs[0];
+        const dMatch = topTx.date.match(/[-.\/](\d{1,2})(?:일)?$/) || topTx.date.match(/(\d{1,2})일/);
+        if (dMatch) {
+          const dNum = parseInt(dMatch[1], 10);
+          if (dNum >= 1 && dNum <= 31) {
+            const dayStr = String(dNum).padStart(2, '0');
+            return `${yearStr}-${monthStr}-${dayStr}`;
+          }
+        }
+      }
+    }
+
+    // 4. Fallback: if viewing current calendar month, use today; otherwise today's day capped
+    const today = new Date();
+    if (today.getMonth() + 1 === viewedMonthNum && String(today.getFullYear()) === yearStr) {
+      return today.toISOString().slice(0, 10);
+    }
+    const safeDay = String(Math.min(today.getDate(), 28)).padStart(2, '0');
+    return `${yearStr}-${monthStr}-${safeDay}`;
+  };
+
+  const [date, setDate] = useState<string>(computeSmartDefaultDate);
+
+  // Sync date when activeSheetTitle or initialDate changes
+  useEffect(() => {
+    setDate(computeSmartDefaultDate());
+  }, [activeSheetTitle, initialDate]);
   const [description, setDescription] = useState<string>('');
   const [category, setCategory] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<string>('');

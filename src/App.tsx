@@ -41,6 +41,7 @@ import { AnnualMatrixView } from './components/AnnualMatrixView';
 import { CategoryManagementModal } from './components/CategoryManagementModal';
 import { DomainAuthModal } from './components/DomainAuthModal';
 import { MigrationAllMonthsModal } from './components/MigrationAllMonthsModal';
+import { RegisterYearSheetModal } from './components/RegisterYearSheetModal';
 import { SAMPLE_ANALYSIS, SAMPLE_TRANSACTIONS } from './data/sampleLedger';
 import {
   USER_2026_DATA,
@@ -332,6 +333,65 @@ export default function App() {
   const [isGitHubOpen, setIsGitHubOpen] = useState(false);
   const [isInputModalOpen, setIsInputModalOpen] = useState(false);
   const [openImportOnModal, setOpenImportOnModal] = useState(false);
+  const [isRegisterYearModalOpen, setIsRegisterYearModalOpen] = useState(false);
+
+  // Multi-Year Sheets Registry state (e.g. 2026, 2025, 2024...)
+  const [yearlySheets, setYearlySheets] = useState<Array<{ year: string; title: string; id: string; url?: string }>>(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const saved = localStorage.getItem('smart_money_yearly_sheets');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    const curYearMatch = spreadsheetTitle?.match(/20\d{2}/) || '2026';
+    return [
+      {
+        year: typeof curYearMatch === 'string' ? curYearMatch : curYearMatch[0],
+        id: spreadsheetId,
+        title: spreadsheetTitle,
+        url: spreadsheetUrl,
+      },
+    ];
+  });
+
+  const activeYear = useMemo(() => {
+    const match = spreadsheetTitle?.match(/20\d{2}/) || activeSheetTitle?.match(/20\d{2}/);
+    return match ? (typeof match === 'string' ? match : match[0]) : '2026';
+  }, [spreadsheetTitle, activeSheetTitle]);
+
+  const handleSelectYearSheet = useCallback(async (cfg: { year: string; title: string; id: string; url?: string }) => {
+    if (!cfg.id) return;
+    setSpreadsheetId(cfg.id);
+    setSpreadsheetTitle(cfg.title);
+    setSpreadsheetUrl(cfg.url || `https://docs.google.com/spreadsheets/d/${cfg.id}`);
+    try {
+      localStorage.setItem('smart_money_spreadsheet_id', cfg.id);
+      localStorage.setItem('smart_money_spreadsheet_title', cfg.title);
+    } catch {}
+    const curMonth = `${new Date().getMonth() + 1}월`;
+    const token = accessToken || getSavedToken() || null;
+    await loadSheetData(cfg.id, curMonth, token);
+  }, [accessToken]);
+
+  const handleRegisterYearSheet = useCallback(async (year: string, id: string, title: string) => {
+    const newConfig = {
+      year,
+      id,
+      title,
+      url: `https://docs.google.com/spreadsheets/d/${id}`,
+    };
+    setYearlySheets((prev) => {
+      const filtered = prev.filter((item) => item.year !== year && item.id !== id);
+      const updated = [...filtered, newConfig].sort((a, b) => b.year.localeCompare(a.year));
+      try {
+        localStorage.setItem('smart_money_yearly_sheets', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    await handleSelectYearSheet(newConfig);
+  }, [handleSelectYearSheet]);
 
   // Floating Real-time Sync Toast Notification
   const [syncToast, setSyncToast] = useState<{
@@ -2136,6 +2196,10 @@ export default function App() {
         onOpenCategoryManager={() => setIsCategoryModalOpen(true)}
         isRealGoogleConnected={Boolean(isRealGoogleConnected && accessToken)}
         onOpenMigrationModal={() => setIsMigrationModalOpen(true)}
+        activeYear={activeYear}
+        yearlySheets={yearlySheets}
+        onSelectYearSheet={handleSelectYearSheet}
+        onOpenRegisterYearModal={() => setIsRegisterYearModalOpen(true)}
       />
 
       {/* Main Content Container */}
@@ -2577,6 +2641,16 @@ export default function App() {
         currentSpreadsheetId={spreadsheetId}
         onSelectSpreadsheet={handleSelectSpreadsheet}
         onImportPastedData={handleImportPastedData}
+      />
+
+      {/* Multi-Year Sheet Registry Modal */}
+      <RegisterYearSheetModal
+        isOpen={isRegisterYearModalOpen}
+        onClose={() => setIsRegisterYearModalOpen(false)}
+        accessToken={accessToken}
+        currentYear={activeYear}
+        registeredYears={yearlySheets}
+        onRegisterYearSheet={handleRegisterYearSheet}
       />
 
       {/* Category & Payment Method Management Modal */}
