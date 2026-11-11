@@ -20,6 +20,9 @@ import {
   CheckSquare,
   Square,
   Loader2,
+  ChevronDown,
+  ChevronUp,
+  Search,
 } from 'lucide-react';
 import {
   USER_2026_DATA,
@@ -243,6 +246,10 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
 
   // Filter chart by selected categories (Multi-select enabled per user request)
   const [selectedCategoryFilters, setSelectedCategoryFilters] = useState<string[]>([]);
+
+  // User request: "연간매트릭스에서 지출 추이 그래프에 카테고리가 전부 보이는게 아닌데, 필요하면 카테고리 전체보기 할 수 있게 해줘"
+  const [showAllCategoriesInLegend, setShowAllCategoriesInLegend] = useState<boolean>(false);
+  const [legendCategorySearch, setLegendCategorySearch] = useState<string>('');
 
   const handleToggleCategoryFilter = (catName: string) => {
     setSelectedCategoryFilters((prev) => {
@@ -660,13 +667,38 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     return map;
   }, [effectiveYearData.categories]);
 
-  // Top categories for chart legend
-  const topCategoriesForLegend = useMemo(() => {
-    return [...effectiveYearData.categories]
-      .filter((c) => c.annualTotal > 0)
-      .sort((a, b) => b.annualTotal - a.annualTotal)
-      .slice(0, 10);
+  // All categories sorted by annual spending descending, then alphabetical
+  const allCategoriesForLegend = useMemo(() => {
+    return [...effectiveYearData.categories].sort((a, b) => {
+      if (b.annualTotal !== a.annualTotal) {
+        return b.annualTotal - a.annualTotal;
+      }
+      return a.category.localeCompare(b.category, 'ko-KR');
+    });
   }, [effectiveYearData.categories]);
+
+  // Categories displayed in the chart legend (supports toggle to view all & search)
+  const displayedLegendCategories = useMemo(() => {
+    let list = allCategoriesForLegend;
+
+    // Search query within legend
+    if (legendCategorySearch.trim()) {
+      const q = legendCategorySearch.trim().toLowerCase();
+      return list.filter((c) => c.category.toLowerCase().includes(q));
+    }
+
+    if (showAllCategoriesInLegend) {
+      return list;
+    }
+
+    // Default collapsed view: top 10 categories with spending > 0, plus any active filter selections
+    const top10 = list.filter((c) => c.annualTotal > 0).slice(0, 10);
+    const top10Names = new Set(top10.map((c) => c.category));
+    const extraSelected = list.filter(
+      (c) => selectedCategoryFilters.includes(c.category) && !top10Names.has(c.category)
+    );
+    return [...top10, ...extraSelected];
+  }, [allCategoriesForLegend, showAllCategoriesInLegend, legendCategorySearch, selectedCategoryFilters]);
 
   // Available categories list
   const allCategoryNames = useMemo(() => {
@@ -1377,7 +1409,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
                                 key={cat.category}
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  setSelectedCategoryFilter(cat.category);
+                                  handleToggleCategoryFilter(cat.category);
                                 }}
                                 style={{ height: `${catPct}%`, backgroundColor: color }}
                                 className="w-full transition-opacity hover:opacity-85 cursor-pointer"
@@ -1438,57 +1470,150 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
         </div>
 
         {/* Clickable Legend: Clicking any category selects/filters it in the chart */}
-        <div className="mt-4 pt-3 border-t border-slate-100 flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs">
-          <span className="font-bold text-slate-700 text-[11px] shrink-0 flex items-center gap-1">
-            <Filter className="w-3 h-3 text-indigo-600" />
-            <span>카테고리 필터:</span>
-          </span>
+        <div className="mt-4 pt-3 border-t border-slate-100 flex flex-col gap-2.5 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+              <span className="font-bold text-slate-700 text-[11px] shrink-0 flex items-center gap-1 mr-1">
+                <Filter className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                <span>카테고리 필터:</span>
+              </span>
 
-          {/* All categories reset pill */}
-          <button
-            type="button"
-            onClick={() => setSelectedCategoryFilters([])}
-            className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition cursor-pointer whitespace-nowrap shrink-0 ${
-              selectedCategoryFilters.length === 0
-                ? 'bg-indigo-600 text-white border-indigo-700 shadow-2xs'
-                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
-            }`}
-          >
-            전체 지출
-          </button>
-
-          {topCategoriesForLegend.map((cat) => {
-            const isSelected = selectedCategoryFilters.includes(cat.category);
-            const color = categoryColorMap[cat.category] || '#94A3B8';
-
-            return (
+              {/* All categories reset pill */}
               <button
-                key={cat.category}
                 type="button"
-                onClick={() => handleToggleCategoryFilter(cat.category)}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs transition cursor-pointer whitespace-nowrap shrink-0 ${
-                  isSelected
-                    ? 'bg-indigo-100 text-indigo-950 font-black border-indigo-400 ring-2 ring-indigo-500/30 shadow-2xs'
-                    : 'bg-slate-50 text-slate-700 font-semibold border-slate-200/80 hover:bg-indigo-50 hover:border-indigo-200'
+                onClick={() => setSelectedCategoryFilters([])}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition cursor-pointer whitespace-nowrap shrink-0 shadow-2xs ${
+                  selectedCategoryFilters.length === 0
+                    ? 'bg-indigo-600 text-white border-indigo-700 shadow-2xs'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
                 }`}
-                title={`클릭하여 '${cat.category}' 멀티 선택/해제`}
               >
-                <span
-                  className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs"
-                  style={{ backgroundColor: color }}
-                />
-                <span className="whitespace-nowrap">{cat.category}</span>
-                <span className="text-[10px] text-slate-500 font-mono">
-                  {(cat.annualTotal / 10000).toFixed(0)}만
-                </span>
-                {isSelected && <Check className="w-3 h-3 text-indigo-600 stroke-[3] shrink-0" />}
+                전체 지출 ({effectiveYearData.totalExpense > 0 ? `${(effectiveYearData.totalExpense / 10000).toFixed(0)}만` : '0원'})
               </button>
-            );
-          })}
 
-          <span className="text-[11px] text-slate-400 ml-auto hidden md:inline-block whitespace-nowrap shrink-0">
-            💡 카테고리를 여러 개 클릭하면 멀티 선택하여 함께 비교할 수 있습니다
-          </span>
+              {/* Toggle View All Categories Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowAllCategoriesInLegend((prev) => !prev);
+                  if (showAllCategoriesInLegend) {
+                    setLegendCategorySearch('');
+                  }
+                }}
+                className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-black border transition cursor-pointer whitespace-nowrap shrink-0 shadow-2xs ${
+                  showAllCategoriesInLegend
+                    ? 'bg-indigo-600 text-white border-indigo-700'
+                    : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
+                }`}
+                title={showAllCategoriesInLegend ? '상위 10개만 보기로 접기' : '모든 카테고리 펼쳐서 보기'}
+              >
+                {showAllCategoriesInLegend ? (
+                  <>
+                    <ChevronUp className="w-3.5 h-3.5 shrink-0" />
+                    <span>상위 10개만 보기 (접기)</span>
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="w-3.5 h-3.5 shrink-0" />
+                    <span>카테고리 전체보기 (총 {allCategoriesForLegend.length}개)</span>
+                  </>
+                )}
+              </button>
+
+              {/* Deselect active filters */}
+              {selectedCategoryFilters.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedCategoryFilters([])}
+                  className="flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-bold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 transition cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <X className="w-3 h-3 text-rose-600 shrink-0" />
+                  <span>선택 해제 ({selectedCategoryFilters.length}개)</span>
+                </button>
+              )}
+            </div>
+
+            {/* Quick search input when expanded */}
+            {showAllCategoriesInLegend && (
+              <div className="relative min-w-[150px] max-w-xs">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="카테고리 검색..."
+                  value={legendCategorySearch}
+                  onChange={(e) => setLegendCategorySearch(e.target.value)}
+                  className="w-full pl-8 pr-7 py-1 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium focus:bg-white focus:outline-indigo-500"
+                />
+                {legendCategorySearch && (
+                  <button
+                    type="button"
+                    onClick={() => setLegendCategorySearch('')}
+                    className="absolute right-2 top-1.5 text-slate-400 hover:text-slate-600 cursor-pointer p-0.5"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Category Chips Container */}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 pt-0.5">
+            {displayedLegendCategories.map((cat) => {
+              const isSelected = selectedCategoryFilters.includes(cat.category);
+              const color = categoryColorMap[cat.category] || '#94A3B8';
+
+              return (
+                <button
+                  key={cat.category}
+                  type="button"
+                  onClick={() => handleToggleCategoryFilter(cat.category)}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg border text-xs transition cursor-pointer whitespace-nowrap shrink-0 ${
+                    isSelected
+                      ? 'bg-indigo-100 text-indigo-950 font-black border-indigo-400 ring-2 ring-indigo-500/30 shadow-2xs'
+                      : 'bg-slate-50 text-slate-700 font-semibold border-slate-200/80 hover:bg-indigo-50 hover:border-indigo-200'
+                  }`}
+                  title={`클릭하여 '${cat.category}' 멀티 선택/해제`}
+                >
+                  <span
+                    className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs"
+                    style={{ backgroundColor: color }}
+                  />
+                  <span className="whitespace-nowrap">{cat.category}</span>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    {cat.annualTotal > 0
+                      ? `${(cat.annualTotal / 10000).toFixed(0)}만`
+                      : '0원'}
+                  </span>
+                  {isSelected && <Check className="w-3 h-3 text-indigo-600 stroke-[3] shrink-0" />}
+                </button>
+              );
+            })}
+
+            {displayedLegendCategories.length === 0 && (
+              <span className="text-xs text-slate-400 py-1">
+                검색된 카테고리가 없습니다.
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center justify-between text-[11px] text-slate-400 pt-0.5">
+            <span>
+              💡 카테고리를 여러 개 클릭하면 멀티 선택하여 함께 비교할 수 있습니다.
+              {!showAllCategoriesInLegend && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllCategoriesInLegend(true)}
+                  className="text-indigo-600 font-bold ml-1.5 hover:underline cursor-pointer"
+                >
+                  (전체 {allCategoriesForLegend.length}개 펼치기)
+                </button>
+              )}
+            </span>
+            <span className="hidden sm:inline whitespace-nowrap">
+              표시 중: {displayedLegendCategories.length}개 / 전체 {allCategoriesForLegend.length}개
+            </span>
+          </div>
         </div>
       </div>
 
