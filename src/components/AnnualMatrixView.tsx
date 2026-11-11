@@ -1184,32 +1184,52 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
           <div className="flex items-center flex-wrap gap-2">
             {/* View Mode Toggle (Active when no category filters selected) */}
             {selectedCategoryFilters.length === 0 ? (
-              <div className="flex items-center p-1 bg-slate-100 rounded-xl border border-slate-200/80">
+              <>
+                <div className="flex items-center p-1 bg-slate-100 rounded-xl border border-slate-200/80">
+                  <button
+                    type="button"
+                    onClick={() => setChartViewMode('category')}
+                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
+                      chartViewMode === 'category'
+                        ? 'bg-white text-indigo-700 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Tag className="w-3.5 h-3.5 shrink-0" />
+                    <span>카테고리별 보기</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setChartViewMode('spendingType')}
+                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
+                      chartViewMode === 'spendingType'
+                        ? 'bg-white text-indigo-700 shadow-2xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    <Layers className="w-3.5 h-3.5 shrink-0" />
+                    <span>고정·일반·특별 구분</span>
+                  </button>
+                </div>
+
                 <button
                   type="button"
-                  onClick={() => setChartViewMode('category')}
-                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
-                    chartViewMode === 'category'
-                      ? 'bg-white text-indigo-700 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
+                  onClick={() => setShowAllCategoriesInLegend((prev) => !prev)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer whitespace-nowrap shrink-0 border shadow-2xs ${
+                    showAllCategoriesInLegend
+                      ? 'bg-indigo-600 text-white border-indigo-700'
+                      : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
                   }`}
+                  title="하단 카테고리 전체 목록 펼치기/접기"
                 >
-                  <Tag className="w-3.5 h-3.5 shrink-0" />
-                  <span>카테고리별 보기</span>
+                  <Filter className="w-3.5 h-3.5 shrink-0" />
+                  <span>
+                    {showAllCategoriesInLegend
+                      ? '카테고리 접기 ▲'
+                      : `카테고리 전체보기 (${allCategoriesForLegend.length}개) ▼`}
+                  </span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setChartViewMode('spendingType')}
-                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
-                    chartViewMode === 'spendingType'
-                      ? 'bg-white text-indigo-700 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <Layers className="w-3.5 h-3.5 shrink-0" />
-                  <span>고정·일반·특별 구분</span>
-                </button>
-              </div>
+              </>
             ) : (
               <button
                 type="button"
