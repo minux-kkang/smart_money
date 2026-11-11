@@ -187,6 +187,43 @@ function isSameCategory(catA?: string, catB?: string): boolean {
   return a === b;
 }
 
+/**
+ * Check if a category name is strictly an EXPENSE category.
+ * Excludes summary/total rows ('총 지출', '총 수입', '합계', '소계' etc.)
+ * Excludes income categories ('급여', '월급', '상여금', '부수입', '수입' etc.)
+ * Respects customCategories type ('expense' vs 'income' vs 'transfer').
+ */
+function isPureExpenseCategory(catName?: string, customCategories?: CategoryItem[]): boolean {
+  if (!catName || typeof catName !== 'string') return false;
+  const trimmed = catName.trim();
+  if (!trimmed) return false;
+
+  // 1. Exclude summary / total rows
+  if (/^(총\s*지출|총\s*수입|합계|총계|소계|월\s*합계|연간\s*합계|잔액|누적\s*잔액|대시보드|dashboard)$/i.test(trimmed)) {
+    return false;
+  }
+
+  // 2. Exclude pure income terms
+  if (/^(총\s*수입|수입|급여|월급|상여금?|보너스|부수입|금융소득|이자수입|배당금?|환급금?|기타수입)$/i.test(trimmed)) {
+    return false;
+  }
+
+  // 3. Exclude transfer terms
+  if (/^(저축|투자|계좌이체|카드대금|청약|기타이체)$/i.test(trimmed)) {
+    return false;
+  }
+
+  // 4. Custom category metadata
+  if (customCategories && customCategories.length > 0) {
+    const found = customCategories.find((c) => isSameCategory(c.name, trimmed));
+    if (found) {
+      return found.type === 'expense';
+    }
+  }
+
+  return true;
+}
+
 export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
   yearData = USER_2026_DATA,
   onSelectMonth,
@@ -538,12 +575,20 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
       (transactions && transactions.length > 0)
     );
 
-    // 1. Collect all known categories
+    // 1. Collect all known categories (Strictly EXPENSE only)
     const allKnownCats = new Set<string>();
     if (customCategories) {
-      customCategories.forEach((c) => allKnownCats.add(c.name));
+      customCategories.forEach((c) => {
+        if (c.type === 'expense' && isPureExpenseCategory(c.name, customCategories)) {
+          allKnownCats.add(c.name);
+        }
+      });
     }
-    yearData.categories.forEach((cat) => allKnownCats.add(cat.category));
+    yearData.categories.forEach((cat) => {
+      if (isPureExpenseCategory(cat.category, customCategories)) {
+        allKnownCats.add(cat.category);
+      }
+    });
 
     // Initialize with 0s for all 12 months
     allKnownCats.forEach((catName) => {
@@ -553,7 +598,9 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     // Only if pure offline demo with no real sheet or tabs, populate sample numbers
     if (!hasRealSource) {
       yearData.categories.forEach((cat) => {
-        catMap.set(cat.category, [...cat.monthly]);
+        if (isPureExpenseCategory(cat.category, customCategories)) {
+          catMap.set(cat.category, [...cat.monthly]);
+        }
       });
     }
 
@@ -581,7 +628,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
           monthly[monthIdx] = 0;
         });
 
-        // Sum actual transactions for this month
+        // Sum actual transactions for this month (Only expense transactions)
         monthTxs.forEach((t) => {
           if (t.type && t.type !== 'expense') return;
 
@@ -589,6 +636,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
           if (t.subItems && t.subItems.length > 0) {
             t.subItems.forEach((sub) => {
               const subCat = (sub.category || t.category || '기타').trim();
+              if (!isPureExpenseCategory(subCat, customCategories)) return;
               let matchedKey: string | null = null;
               for (const k of catMap.keys()) {
                 if (isSameCategory(k, subCat)) {
@@ -607,6 +655,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
 
           // Main transaction
           const mainCat = (t.category || '기타').trim();
+          if (!isPureExpenseCategory(mainCat, customCategories)) return;
           let matchedKey: string | null = null;
           for (const k of catMap.keys()) {
             if (isSameCategory(k, mainCat)) {
@@ -623,9 +672,10 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
       }
     }
 
-    // Convert catMap to CategoryMonthlyData[]
+    // Convert catMap to CategoryMonthlyData[] (Strictly pure expense categories only)
     const categories: CategoryMonthlyData[] = [];
     catMap.forEach((monthly, category) => {
+      if (!isPureExpenseCategory(category, customCategories)) return;
       const annualTotal = monthly.reduce((a, b) => a + b, 0);
       categories.push({
         category,
@@ -667,15 +717,17 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     return map;
   }, [effectiveYearData.categories]);
 
-  // All categories sorted by annual spending descending, then alphabetical
+  // All categories sorted by annual spending descending, then alphabetical (Strictly pure expense only)
   const allCategoriesForLegend = useMemo(() => {
-    return [...effectiveYearData.categories].sort((a, b) => {
-      if (b.annualTotal !== a.annualTotal) {
-        return b.annualTotal - a.annualTotal;
-      }
-      return a.category.localeCompare(b.category, 'ko-KR');
-    });
-  }, [effectiveYearData.categories]);
+    return effectiveYearData.categories
+      .filter((c) => isPureExpenseCategory(c.category, customCategories))
+      .sort((a, b) => {
+        if (b.annualTotal !== a.annualTotal) {
+          return b.annualTotal - a.annualTotal;
+        }
+        return a.category.localeCompare(b.category, 'ko-KR');
+      });
+  }, [effectiveYearData.categories, customCategories]);
 
   // Categories displayed in the chart legend (supports toggle to view all & search)
   const displayedLegendCategories = useMemo(() => {
@@ -700,12 +752,20 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     return [...top10, ...extraSelected];
   }, [allCategoriesForLegend, showAllCategoriesInLegend, legendCategorySearch, selectedCategoryFilters]);
 
-  // Available categories list
+  // Available categories list (Strictly pure expense only)
   const allCategoryNames = useMemo(() => {
     const names = new Set<string>();
-    effectiveYearData.categories.forEach((c) => names.add(c.category));
+    effectiveYearData.categories.forEach((c) => {
+      if (isPureExpenseCategory(c.category, customCategories)) {
+        names.add(c.category);
+      }
+    });
     if (customCategories) {
-      customCategories.forEach((c) => names.add(c.name));
+      customCategories.forEach((c) => {
+        if (c.type === 'expense' && isPureExpenseCategory(c.name, customCategories)) {
+          names.add(c.name);
+        }
+      });
     }
     return Array.from(names);
   }, [effectiveYearData.categories, customCategories]);

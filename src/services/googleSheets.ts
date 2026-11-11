@@ -277,9 +277,14 @@ export function extractYearMatrixData(rows: string[][]): YearDashboardData | nul
 
   for (let r = headerRowIndex + 1; r < rows.length; r++) {
     const row = rows[r];
-    if (!row || row.length === 0) continue;
     const catName = String(row[0] || '').trim();
-    if (!catName || /합계|총계|소계|총 지출|총 수입|Dashboard/i.test(catName)) continue;
+    if (
+      !catName ||
+      /합계|총계|소계|총\s*지출|총\s*수입|월\s*합계|연간\s*합계|잔액|누적|대시보드|dashboard/i.test(catName) ||
+      /^(수입|급여|월급|상여금?|보너스|부수입|금융소득|이자수입|배당금?|환급금?|기타수입)$/i.test(catName)
+    ) {
+      continue;
+    }
 
     const annualTotalRaw = row[1] ? String(row[1]).replace(/[^0-9.-]/g, '') : '0';
     const annualTotal = parseFloat(annualTotalRaw) || 0;
