@@ -745,7 +745,7 @@ export function parseCategoriesFromSheetRows(rows: string[][]): {
           }
 
           if (!resolvedGrp) {
-            resolvedGrp = getPaymentMethodGroup(rawName);
+            resolvedGrp = getPaymentMethodGroup(rawName) || '기타';
           }
 
           paymentMap.set(canonical, resolvedGrp);
@@ -863,15 +863,15 @@ export function serializeCategoriesToSheetRows(
   };
 
   const sortedPayments = [...paymentMethods].sort((a, b) => {
-    const grpA = getPaymentMethodGroup(a.name, a.group);
-    const grpB = getPaymentMethodGroup(b.name, b.group);
+    const grpA = getPaymentMethodGroup(a.name, a.group) || '기타';
+    const grpB = getPaymentMethodGroup(b.name, b.group) || '기타';
     const ordA = groupOrder[grpA] || 99;
     const ordB = groupOrder[grpB] || 99;
     if (ordA !== ordB) return ordA - ordB;
     return a.name.localeCompare(b.name);
   });
 
-  const payGroupList = sortedPayments.map((p) => getPaymentMethodGroup(p.name, p.group));
+  const payGroupList = sortedPayments.map((p) => getPaymentMethodGroup(p.name, p.group) || '기타');
   const payNameList = sortedPayments.map((p) => p.name);
 
   const maxRows = Math.max(

@@ -2615,6 +2615,7 @@ export default function App() {
               analysis={analysis}
               activeSheetTitle={activeSheetTitle}
               spreadsheetTitle={spreadsheetTitle}
+              spreadsheetId={spreadsheetId}
               isRealGoogleConnected={isRealGoogleConnected}
               onAddTransaction={handleAddTransaction}
               onBatchAddTransactions={handleBatchAddTransactions}

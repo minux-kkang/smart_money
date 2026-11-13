@@ -52,11 +52,13 @@ import {
 } from '../services/categoryManager';
 import { evaluateMathFormula, containsFormula, sanitizeFormulaInput } from '../utils/mathFormula';
 import { getPaymentGroupBadge } from '../utils/paymentGroupUtils';
+import { extractMonthNumberFromTab } from '../services/googleSheets';
 
 interface ExpenseInputFormProps {
   analysis: SheetAnalysisResult;
   activeSheetTitle: string;
   spreadsheetTitle: string;
+  spreadsheetId?: string;
   isRealGoogleConnected: boolean;
   onAddTransaction: (
     transaction: Omit<Transaction, 'id' | 'rowIndex'> & { sheetTitle?: string }
@@ -81,6 +83,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   analysis,
   activeSheetTitle,
   spreadsheetTitle,
+  spreadsheetId,
   isRealGoogleConnected,
   onAddTransaction,
   onBatchAddTransactions,
@@ -100,10 +103,49 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   const [amountStr, setAmountStr] = useState<string>('');
   const [splitSubItemsIntoSeparateTx, setSplitSubItemsIntoSeparateTx] = useState<boolean>(false);
 
-  // User request: "월별 보기에서 다른 월 보고 있을 때 입력버튼 누르면 보고있는 월과 보고있는 일자(여러개중 상단)를 설정 바로 해줘. 다른달거 추가할때 편하게"
-  const computeSmartDefaultDate = (): string => {
+  const formatLocalYMD = (d: Date): string => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const sheetStorageKey = `smart_money_last_entered_dates_${spreadsheetId || analysis?.spreadsheetId || 'default'}`;
+
+  const getSavedEnteredDates = (): { lastDate?: string; byMonth?: Record<string, string> } => {
+    if (typeof window === 'undefined') return {};
+    try {
+      const raw = localStorage.getItem(sheetStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch {}
+    return {};
+  };
+
+  const saveLastEnteredDate = (enteredDate: string) => {
+    if (typeof window === 'undefined' || !/^\d{4}-\d{2}-\d{2}$/.test(enteredDate)) return;
+    try {
+      const existing = getSavedEnteredDates();
+      const monthNum = parseInt(enteredDate.slice(5, 7), 10);
+      const updated = {
+        lastDate: enteredDate,
+        byMonth: {
+          ...(existing.byMonth || {}),
+          ...(monthNum >= 1 && monthNum <= 12 ? { [String(monthNum)]: enteredDate } : {}),
+        },
+      };
+      localStorage.setItem(sheetStorageKey, JSON.stringify(updated));
+    } catch {}
+  };
+
+  // User request:
+  // 1. If the user has previously entered a date (for the viewed month, or overall on non-month tabs), default to that date for seamless consecutive entries.
+  // 2. Otherwise fall back to viewed month + topmost transaction's day (or today).
+  const computeSmartDefaultDate = (): { date: string; isRemembered: boolean } => {
     if (initialDate && /^\d{4}-\d{2}-\d{2}$/.test(initialDate)) {
-      return initialDate;
+      return { date: initialDate, isRemembered: false };
     }
 
     // 1. Year (from spreadsheetTitle e.g. "2026_가계부" or activeSheetTitle or current calendar year)
@@ -111,9 +153,20 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     const yearStr = yearMatch ? yearMatch[0] : String(new Date().getFullYear());
 
     // 2. Month (from activeSheetTitle e.g. "10월" -> 10)
-    const mMatch = activeSheetTitle?.match(/(\d{1,2})월?/);
-    const viewedMonthNum = mMatch ? parseInt(mMatch[1], 10) : new Date().getMonth() + 1;
+    const extractedMonth = extractMonthNumberFromTab(activeSheetTitle);
+    const viewedMonthNum = extractedMonth ?? new Date().getMonth() + 1;
     const monthStr = String(viewedMonthNum).padStart(2, '0');
+
+    // 2-1. Check if the user has already entered a date before
+    const saved = getSavedEnteredDates();
+    if (extractedMonth !== null) {
+      const savedForMonth = saved.byMonth?.[String(viewedMonthNum)];
+      if (savedForMonth && /^\d{4}-\d{2}-\d{2}$/.test(savedForMonth) && savedForMonth.startsWith(`${yearStr}-`)) {
+        return { date: savedForMonth, isRemembered: true };
+      }
+    } else if (saved.lastDate && /^\d{4}-\d{2}-\d{2}$/.test(saved.lastDate) && saved.lastDate.startsWith(`${yearStr}-`)) {
+      return { date: saved.lastDate, isRemembered: true };
+    }
 
     // 3. Day: Look for topmost transaction in this viewed month
     if (transactions && transactions.length > 0) {
@@ -133,7 +186,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
           const dNum = parseInt(dMatch[1], 10);
           if (dNum >= 1 && dNum <= 31) {
             const dayStr = String(dNum).padStart(2, '0');
-            return `${yearStr}-${monthStr}-${dayStr}`;
+            return { date: `${yearStr}-${monthStr}-${dayStr}`, isRemembered: false };
           }
         }
       }
@@ -142,18 +195,22 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     // 4. Fallback: if viewing current calendar month, use today; otherwise today's day capped
     const today = new Date();
     if (today.getMonth() + 1 === viewedMonthNum && String(today.getFullYear()) === yearStr) {
-      return today.toISOString().slice(0, 10);
+      return { date: formatLocalYMD(today), isRemembered: false };
     }
     const safeDay = String(Math.min(today.getDate(), 28)).padStart(2, '0');
-    return `${yearStr}-${monthStr}-${safeDay}`;
+    return { date: `${yearStr}-${monthStr}-${safeDay}`, isRemembered: false };
   };
 
-  const [date, setDate] = useState<string>(computeSmartDefaultDate);
+  const initialDefaultDateInfo = computeSmartDefaultDate();
+  const [date, setDate] = useState<string>(initialDefaultDateInfo.date);
+  const [isRememberedDate, setIsRememberedDate] = useState<boolean>(initialDefaultDateInfo.isRemembered);
 
-  // Sync date when activeSheetTitle or initialDate changes
+  // Sync date when activeSheetTitle, initialDate, or spreadsheetId changes
   useEffect(() => {
-    setDate(computeSmartDefaultDate());
-  }, [activeSheetTitle, initialDate]);
+    const info = computeSmartDefaultDate();
+    setDate(info.date);
+    setIsRememberedDate(info.isRemembered);
+  }, [activeSheetTitle, initialDate, spreadsheetId]);
   const [description, setDescription] = useState<string>('');
   const [category, setCategory] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<string>('');
@@ -913,7 +970,8 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   const setQuickDate = (daysAgo: number) => {
     const d = new Date();
     d.setDate(d.getDate() - daysAgo);
-    setDate(d.toISOString().slice(0, 10));
+    setDate(formatLocalYMD(d));
+    setIsRememberedDate(false);
   };
 
   // Handle Add Category
@@ -959,6 +1017,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
 
 
     setIsSubmitting(true);
+    saveLastEnteredDate(date);
     try {
       const validSubItems = subItems
         .filter((s) => s.name.trim().length > 0 || (Number(s.amount) || 0) > 0)
@@ -1186,15 +1245,25 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
       <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-4 bg-white">
         {/* 1. Date Selection */}
         <div>
-          <label className="block text-xs font-black text-slate-700 mb-1.5 flex items-center gap-1">
-            <Calendar className="w-3.5 h-3.5 text-blue-600" />
-            <span>지출/수입 날짜</span>
-          </label>
+          <div className="flex items-center justify-between gap-2 mb-1.5">
+            <label className="text-xs font-black text-slate-700 flex items-center gap-1">
+              <Calendar className="w-3.5 h-3.5 text-blue-600" />
+              <span>지출/수입 날짜</span>
+            </label>
+            {isRememberedDate && (
+              <span className="text-[11px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md whitespace-nowrap">
+                직전 입력 날짜 유지됨
+              </span>
+            )}
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <input
               type="date"
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(e) => {
+                setDate(e.target.value);
+                setIsRememberedDate(false);
+              }}
               className="flex-1 min-w-[150px] px-3.5 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-xs sm:text-sm font-bold text-slate-900 focus:outline-none focus:border-blue-600"
               required
             />
@@ -1203,7 +1272,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                 type="button"
                 onClick={() => setQuickDate(0)}
                 className={`px-3 py-2 text-xs font-extrabold rounded-xl transition cursor-pointer ${
-                  date === new Date().toISOString().slice(0, 10)
+                  date === formatLocalYMD(new Date())
                     ? 'bg-blue-600 text-white'
                     : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                 }`}
@@ -2371,7 +2440,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
 
                             {payBadge && (
                               <span
-                                className={`text-[10px] font-black px-1.5 py-0.5 rounded ${payBadge.badgeClass}`}
+                                className={`text-[10px] font-black px-1.5 py-0.5 rounded border ${payBadge.colorClass}`}
                                 title={item.paymentMethod}
                               >
                                 {payBadge.label}

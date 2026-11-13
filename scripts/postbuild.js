@@ -31,6 +31,16 @@ function copyDir(src, dest) {
   }
 }
 
+// Clean stale hashed assets in docs/assets so old build artifacts don't accumulate
+const docsAssetsDir = path.join(docsDir, 'assets');
+if (fs.existsSync(docsAssetsDir)) {
+  for (const file of fs.readdirSync(docsAssetsDir)) {
+    if (/^index-.*\.(js|css|map)$/.test(file)) {
+      fs.unlinkSync(path.join(docsAssetsDir, file));
+    }
+  }
+}
+
 // 1. Copy dist to docs for GitHub Pages (/docs deployment)
 copyDir(distDir, docsDir);
 
