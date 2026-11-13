@@ -51,22 +51,22 @@ import {
   formatShortDate,
   SubItem,
   CategoryItem,
-  DEFAULT_EXPENSE_CATEGORIES,
-  DEFAULT_INCOME_CATEGORIES,
-  DEFAULT_TRANSFER_CATEGORIES,
+  PaymentMethodItem,
+  SheetAnalysisResult,
 } from '../types/ledger';
 import { SubItemModal } from './SubItemModal';
 import { CopyPasteModal } from './CopyPasteModal';
 import { DailyPaceComparisonModal } from './DailyPaceComparisonModal';
+import { ExpenseInputForm } from './ExpenseInputForm';
 import { YearDashboardData } from '../data/userLedgerData';
 import { saveSubItemsForTransaction, serializeSubItemsToMemo } from '../services/subItemStorage';
-import {
-  getSmartUsageFrequencyMap,
-  sortCategoriesByPastFrequency,
-  UsageFrequencyStats,
-} from '../services/categoryManager';
-import { evaluateMathFormula, containsFormula, sanitizeFormulaInput } from '../utils/mathFormula';
 import { getPaymentGroupBadge } from '../utils/paymentGroupUtils';
+import {
+  parseInstallmentMeta,
+  loadInstallmentPlans,
+  deleteInstallmentPlan,
+  InstallmentPlan,
+} from '../services/installmentStorage';
 
 interface DashboardProps {
   transactions: Transaction[];
@@ -80,10 +80,14 @@ interface DashboardProps {
     transaction: Omit<Transaction, 'id' | 'rowIndex'> & { sheetTitle?: string }
   ) => Promise<void>;
   isRealGoogleConnected: boolean;
+  analysis?: SheetAnalysisResult;
+  spreadsheetTitle?: string;
   availableCategories?: string[];
   availablePaymentMethods?: string[];
   customCategories?: CategoryItem[];
+  customPaymentMethods?: PaymentMethodItem[];
   onOpenCategoryManager?: () => void;
+  onAddCustomCategory?: (name: string, type: TransactionType) => void;
   onAddCustomPaymentMethod?: (name: string) => void;
   onExportCurrentMonthToGoogleSheets?: () => Promise<void>;
   isExportingMonth?: boolean;
@@ -167,10 +171,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onBatchDeleteTransactions,
   onAddTransaction,
   isRealGoogleConnected,
+  analysis,
+  spreadsheetTitle = '',
   availableCategories = [],
   availablePaymentMethods = [],
   customCategories = [],
+  customPaymentMethods,
   onOpenCategoryManager,
+  onAddCustomCategory,
   onAddCustomPaymentMethod,
   onExportCurrentMonthToGoogleSheets,
   isExportingMonth = false,
@@ -212,8 +220,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<'all' | TransactionType>('all');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('all');
   const [selectedRecurringFilter, setSelectedRecurringFilter] = useState<
-    'all' | 'recurring' | 'routine' | 'special' | 'variable'
+    'all' | 'recurring' | 'routine' | 'special' | 'variable' | 'installment'
   >('all');
+  const [isInstallmentModalOpen, setIsInstallmentModalOpen] = useState<boolean>(false);
+  const [confirmDeletePlanId, setConfirmDeletePlanId] = useState<string | null>(null);
+  const [installmentPlans, setInstallmentPlans] = useState<InstallmentPlan[]>(() =>
+    loadInstallmentPlans(spreadsheetId)
+  );
+
+  React.useEffect(() => {
+    setInstallmentPlans(loadInstallmentPlans(spreadsheetId));
+    if (!isInstallmentModalOpen) setConfirmDeletePlanId(null);
+  }, [spreadsheetId, transactions, isInstallmentModalOpen]);
   const [excludeSpecialExpense, setExcludeSpecialExpense] = useState<boolean>(false);
   // Default to current month (e.g. 10월, 11월)
   const [selectedMonthFilter, setSelectedMonthFilter] = useState<string>(() => {
@@ -345,20 +363,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [isBatchCategoryModalOpen, setIsBatchCategoryModalOpen] = useState(false);
   const [batchTargetCategory, setBatchTargetCategory] = useState('');
   const [batchCategoryCustom, setBatchCategoryCustom] = useState('');
+  const [batchCategorySearch, setBatchCategorySearch] = useState('');
   const [isProcessingBatchCategory, setIsProcessingBatchCategory] = useState(false);
 
-  // Edit Modal State (Synchronized with ExpenseInputForm)
+  // Edit Modal State (Unified with ExpenseInputForm)
   const [editModalTx, setEditModalTx] = useState<Transaction | null>(null);
-  const [editForm, setEditForm] = useState<Partial<Transaction>>({});
-  const [editAmountStr, setEditAmountStr] = useState<string>('');
-  const [editSubItems, setEditSubItems] = useState<SubItem[]>([]);
-  const [showEditSubItemEntry, setShowEditSubItemEntry] = useState<boolean>(false);
-  const [customCategoryInput, setCustomCategoryInput] = useState<boolean>(false);
-  const [newCategoryText, setNewCategoryText] = useState<string>('');
-  const [customPaymentInput, setCustomPaymentInput] = useState<boolean>(false);
-  const [newPaymentText, setNewPaymentText] = useState<string>('');
-  const [showAllPaymentMethods, setShowAllPaymentMethods] = useState<boolean>(false);
-  const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
+
+  const resolvedCustomPaymentMethods = useMemo<PaymentMethodItem[]>(() => {
+    if (customPaymentMethods && customPaymentMethods.length > 0) {
+      return customPaymentMethods;
+    }
+    return availablePaymentMethods.map((name, i) => ({
+      id: `pm_prop_${i}_${name}`,
+      name,
+      isVisible: true,
+    }));
+  }, [customPaymentMethods, availablePaymentMethods]);
 
   // Amount Display Sign Mode ('positive': 양수 통일 | 'signed': 지출- 수입+)
   const [amountSignMode, setAmountSignMode] = useState<'positive' | 'signed'>(() => {
@@ -369,92 +389,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return 'positive'; // Default to positive (카테고리/구분이 있으므로 음수 없이 양수 통일)
   });
 
-  // Category frequency stats map for the Edit modal (smart recency)
-  const editCategoryStatsMap = useMemo(() => {
-    return getSmartUsageFrequencyMap(transactions, editForm.date || activeSheetTitle, 'category');
-  }, [transactions, editForm.date, activeSheetTitle]);
-
-  const editCategoryFrequencyMap = useMemo(() => {
-    const map = new Map<string, number>();
-    editCategoryStatsMap.forEach((stat, key) => map.set(key, stat.score));
-    return map;
-  }, [editCategoryStatsMap]);
-
-  // Categories for Edit Modal, strictly filtered by editForm.type and sorted by past frequency
-  const editModalCategories = useMemo(() => {
-    const currentType = editForm.type || 'expense';
-    let list: string[] = [];
-
-    if (customCategories && customCategories.length > 0) {
-      list = customCategories
-        .filter((c) => {
-          if (currentType === 'income') return c.type === 'income';
-          if (currentType === 'transfer') return c.type === 'transfer';
-          return c.type === 'expense' || !c.type;
-        })
-        .map((c) => c.name);
-    }
-
-    if (list.length === 0) {
-      if (currentType === 'income') {
-        list = [...DEFAULT_INCOME_CATEGORIES];
-      } else if (currentType === 'transfer') {
-        list = [...DEFAULT_TRANSFER_CATEGORIES];
-      } else {
-        list = [...DEFAULT_EXPENSE_CATEGORIES];
-      }
-    }
-
-    // Include existing categories from transactions of this type
-    transactions.forEach((t) => {
-      if (t.type === currentType && t.category && !list.includes(t.category)) {
-        list.push(t.category);
-      }
-    });
-
-    // Ensure currently selected category is included
-    if (editForm.category && !list.includes(editForm.category)) {
-      list.push(editForm.category);
-    }
-
-    return sortCategoriesByPastFrequency(list, editCategoryFrequencyMap);
-  }, [editForm.type, editForm.category, customCategories, transactions, editCategoryFrequencyMap]);
-
-  // Change edit type and switch category to matching top category if current is not in new type
-  const handleEditTypeChange = (newType: TransactionType) => {
-    let list: string[] = [];
-    if (customCategories && customCategories.length > 0) {
-      list = customCategories
-        .filter((c) => {
-          if (newType === 'income') return c.type === 'income';
-          if (newType === 'transfer') return c.type === 'transfer';
-          return c.type === 'expense' || !c.type;
-        })
-        .map((c) => c.name);
-    }
-
-    if (list.length === 0) {
-      if (newType === 'income') {
-        list = [...DEFAULT_INCOME_CATEGORIES];
-      } else if (newType === 'transfer') {
-        list = [...DEFAULT_TRANSFER_CATEGORIES];
-      } else {
-        list = [...DEFAULT_EXPENSE_CATEGORIES];
-      }
-    }
-
-    const sorted = sortCategoriesByPastFrequency(list, editCategoryFrequencyMap);
-    const nextCategory = sorted.includes(editForm.category || '')
-      ? editForm.category
-      : (sorted[0] || '기타');
-
-    setEditForm((prev) => ({
-      ...prev,
-      type: newType,
-      category: nextCategory,
-    }));
-  };
-
   // Sub-Item Breakdown Modal State (Coupang, Mart, etc.)
   const [subItemModalTx, setSubItemModalTx] = useState<Transaction | null>(null);
 
@@ -463,14 +397,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     await onEditTransaction(updatedTx);
     if (editModalTx && editModalTx.id === updatedTx.id) {
       setEditModalTx(updatedTx);
-      setEditForm((prev) => ({
-        ...prev,
-        amount: updatedTx.amount,
-        memo: updatedTx.memo,
-        subItems: updatedTx.subItems,
-      }));
-      setEditAmountStr(updatedTx.amount.toLocaleString('ko-KR'));
-      setEditSubItems(updatedTx.subItems ? updatedTx.subItems.map((s) => ({ ...s })) : []);
     }
     setSubItemModalTx(null);
   };
@@ -899,9 +825,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
   }, [transactions, selectedSpendingTypeDetail, selectedMonthFilter]);
 
 
-  // Unique categories for filter dropdown
+  // Unique categories for filter dropdown & sub-item modal (includes hidden customCategories)
   const allCategories = useMemo(() => {
     const set = new Set<string>();
+    customCategories.forEach((c) => {
+      if (c.name) set.add(c.name);
+    });
     transactions.forEach((t) => {
       if (t.category) set.add(t.category);
     });
@@ -909,53 +838,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       if (c) set.add(c);
     });
     return Array.from(set).filter(Boolean);
-  }, [transactions, availableCategories]);
-
-  // Available Payment Methods with smart frequency tracking (start of month: last month, then current month)
-  const paymentStatsMap = useMemo(() => {
-    return getSmartUsageFrequencyMap(transactions, editForm.date || activeSheetTitle, 'paymentMethod');
-  }, [transactions, editForm.date, activeSheetTitle]);
-
-  const paymentFrequencyMap = useMemo(() => {
-    const map = new Map<string, number>();
-    paymentStatsMap.forEach((stat, key) => map.set(key, stat.score));
-    return map;
-  }, [paymentStatsMap]);
-
-  const allPaymentMethods = useMemo(() => {
-    const set = new Set<string>();
-    transactions.forEach((t) => {
-      if (t.paymentMethod && t.paymentMethod.trim()) set.add(t.paymentMethod.trim());
-    });
-    availablePaymentMethods.forEach((p) => {
-      if (p && p.trim()) set.add(p.trim());
-    });
-    [
-      '신용카드',
-      '체크카드',
-      '현대카드',
-      '신한카드',
-      '삼성카드',
-      'KB국민카드',
-      '자동이체',
-      '계좌이체',
-      '국민은행',
-      '현금',
-      '네이버페이',
-      '카카오페이',
-      '토스페이',
-      '티머니',
-    ].forEach((p) => set.add(p));
-
-    return Array.from(set)
-      .filter(Boolean)
-      .sort((a, b) => {
-        const fA = paymentFrequencyMap.get(a) || 0;
-        const fB = paymentFrequencyMap.get(b) || 0;
-        if (fA !== fB) return fB - fA;
-        return a.localeCompare(b);
-      });
-  }, [transactions, availablePaymentMethods, paymentFrequencyMap]);
+  }, [customCategories, transactions, availableCategories]);
 
   // Filtered & Sorted Transactions
   const filteredTransactions = useMemo(() => {
@@ -987,6 +870,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           if (selectedRecurringFilter === 'special' && !isSpec) return false;
           if (selectedRecurringFilter === 'routine' && (isRec || isSpec)) return false;
           if (selectedRecurringFilter === 'variable' && isRec) return false;
+          if (selectedRecurringFilter === 'installment' && !parseInstallmentMeta(t)) return false;
         }
 
         // Month filter - robustly extract month from date or sheet title
@@ -1046,6 +930,137 @@ export const Dashboard: React.FC<DashboardProps> = ({
     sortAsc,
   ]);
 
+  // Merged installment tracker view (saved local plans + sheet-detected installment rows)
+  const mergedInstallmentOverview = useMemo(() => {
+    const now = new Date();
+    const todayYMD = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+    const sheetDiscoveredMap = new Map<
+      string,
+      {
+        key: string;
+        description: string;
+        category: string;
+        paymentMethod: string;
+        total: number;
+        rateLabel: string;
+        isInterestFree: boolean;
+        totalPrincipal?: number;
+        startDate?: string;
+        rows: Array<{ tx: Transaction; current: number; total: number }>;
+      }
+    >();
+
+    transactions.forEach((t) => {
+      const meta = parseInstallmentMeta(t);
+      if (!meta) return;
+      const baseDesc = (t.description || '').replace(/\s*\(할부\s*\d+\/\d+\)\s*$/, '').trim();
+      const existing = sheetDiscoveredMap.get(meta.planKey);
+      if (existing) {
+        existing.rows.push({ tx: t, current: meta.current, total: meta.total });
+      } else {
+        sheetDiscoveredMap.set(meta.planKey, {
+          key: meta.planKey,
+          description: baseDesc || t.description,
+          category: t.category,
+          paymentMethod: t.paymentMethod || '',
+          total: meta.total,
+          rateLabel: meta.rateLabel || (meta.isInterestFree ? '무이자' : '유이자'),
+          isInterestFree: meta.isInterestFree,
+          totalPrincipal: meta.totalPrincipal,
+          startDate: meta.startDate || t.date,
+          rows: [{ tx: t, current: meta.current, total: meta.total }],
+        });
+      }
+    });
+
+    const matchedKeys = new Set<string>();
+    const savedCards = installmentPlans.map((plan) => {
+      const expectedKey = `${plan.description.trim()}__${plan.months}__${plan.startDate}`;
+      const fallbackKey = `${plan.description.trim()}__${plan.months}`;
+      if (sheetDiscoveredMap.has(expectedKey)) matchedKeys.add(expectedKey);
+      if (sheetDiscoveredMap.has(fallbackKey)) matchedKeys.add(fallbackKey);
+
+      const paidCount = plan.schedule.filter((s) => s.date <= todayYMD).length;
+      const remainingCount = Math.max(0, plan.schedule.length - paidCount);
+      const remainingAmount = plan.schedule
+        .filter((s) => s.date > todayYMD)
+        .reduce((acc, s) => acc + s.amount, 0);
+      const monthlyAvg =
+        plan.schedule.length > 0 ? Math.round(plan.totalPayable / plan.schedule.length) : 0;
+
+      return {
+        id: plan.id,
+        isSavedPlan: true,
+        plan,
+        description: plan.description,
+        category: plan.category,
+        paymentMethod: plan.paymentMethod,
+        startDate: plan.startDate,
+        months: plan.months,
+        annualInterestRate: plan.annualInterestRate,
+        rateLabel: plan.annualInterestRate > 0 ? `연 ${plan.annualInterestRate}%` : '무이자',
+        totalPrincipal: plan.totalPrincipal,
+        totalInterest: plan.totalInterest,
+        totalPayable: plan.totalPayable,
+        monthlyAvg,
+        paidCount,
+        remainingCount,
+        remainingAmount,
+      };
+    });
+
+    const sheetOnlyCards = Array.from(sheetDiscoveredMap.values())
+      .filter((item) => !matchedKeys.has(item.key))
+      .map((item) => {
+        const sortedRows = [...item.rows].sort((a, b) => a.current - b.current);
+        const latestRow = sortedRows[sortedRows.length - 1];
+        const avgAmt =
+          sortedRows.length > 0
+            ? Math.round(
+                sortedRows.reduce((acc, r) => acc + r.tx.amount, 0) / sortedRows.length
+              )
+            : 0;
+        const paidCount = Math.min(item.total, latestRow ? latestRow.current : sortedRows.length);
+        const remainingCount = Math.max(0, item.total - paidCount);
+        const totalEst = item.totalPrincipal || avgAmt * item.total;
+
+        return {
+          id: `sheet_${item.key}`,
+          isSavedPlan: false,
+          plan: null as InstallmentPlan | null,
+          description: item.description,
+          category: item.category,
+          paymentMethod: item.paymentMethod,
+          startDate: item.startDate || sortedRows[0]?.tx.date || '',
+          months: item.total,
+          annualInterestRate: 0,
+          rateLabel: item.rateLabel,
+          totalPrincipal: totalEst,
+          totalInterest: 0,
+          totalPayable: totalEst,
+          monthlyAvg: avgAmt,
+          paidCount,
+          remainingCount,
+          remainingAmount: avgAmt * remainingCount,
+          sheetRows: sortedRows,
+        };
+      });
+
+    const allCards = [...savedCards, ...sheetOnlyCards];
+    const activeCards = allCards.filter((c) => c.remainingCount > 0);
+    const totalRemainingAmount = activeCards.reduce((acc, c) => acc + c.remainingAmount, 0);
+    const monthlyCommitment = activeCards.reduce((acc, c) => acc + c.monthlyAvg, 0);
+
+    return {
+      allCards,
+      activeCount: activeCards.length,
+      totalCount: allCards.length,
+      totalRemainingAmount,
+      monthlyCommitment,
+    };
+  }, [installmentPlans, transactions]);
+
   // Active filter state and reset helper
   const hasActiveFilters = Boolean(
     searchQuery.trim() ||
@@ -1082,336 +1097,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
     setSelectedIds(next);
   };
 
-  // Open Edit Modal with full synchronization
+  // Open Unified Edit Modal
   const handleOpenEditModal = (t: Transaction) => {
-    const isRec = Boolean(
-      t.isRecurring ||
-      t.memo?.includes('[정기예산]') ||
-      t.memo?.includes('[고정지출]') ||
-      t.memo?.includes('[정기지출]')
-    );
-    const isSpec = Boolean(
-      t.isSpecial ||
-      t.memo?.includes('[특별지출]') ||
-      t.memo?.includes('[비정기지출]')
-    );
     setEditModalTx(t);
-    setEditForm({
-      date: t.date,
-      type: t.type,
-      category: t.category,
-      description: t.description,
-      amount: t.amount,
-      paymentMethod: t.paymentMethod,
-      memo: t.memo,
-      isRecurring: isRec,
-      isSpecial: isSpec,
-    });
-    setEditAmountStr(t.amount > 0 ? t.amount.toLocaleString('ko-KR') : '');
-    setEditSubItems(t.subItems ? t.subItems.map((s) => ({ ...s })) : []);
-    setShowEditSubItemEntry(!!(t.subItems && t.subItems.length > 0));
-    setCustomCategoryInput(false);
-    setNewCategoryText('');
-    setCustomPaymentInput(false);
-    setNewPaymentText('');
-    setShowAllPaymentMethods(false);
-  };
-
-  // Math formula calculation for edit modal amount
-  const editFormulaEval = useMemo(() => {
-    return evaluateMathFormula(editAmountStr);
-  }, [editAmountStr]);
-
-  const isEditFormula = useMemo(() => {
-    return containsFormula(editAmountStr);
-  }, [editAmountStr]);
-
-  const handleApplyEditFormula = () => {
-    if (editFormulaEval.isValid && typeof editFormulaEval.value === 'number') {
-      const val = editFormulaEval.value;
-      setEditAmountStr(val.toLocaleString('ko-KR'));
-      setEditForm((prev) => ({ ...prev, amount: val }));
-    }
-  };
-
-  const handleInsertEditChar = (ch: string) => {
-    if (ch === '=') {
-      handleApplyEditFormula();
-      return;
-    }
-    if (ch === 'C' || ch === 'AC' || ch === 'clear') {
-      setEditAmountStr('');
-      setEditForm((prev) => ({ ...prev, amount: 0 }));
-      return;
-    }
-    if (ch === 'BS' || ch === 'backspace') {
-      setEditAmountStr((prev) => prev.slice(0, -1).trimEnd());
-      return;
-    }
-
-    // Digits, 00, or dot
-    if (/^[0-9.]$/.test(ch) || ch === '00') {
-      setEditAmountStr((prev) => {
-        if (prev === '0' && ch !== '.') return ch;
-        return `${prev}${ch}`;
-      });
-      return;
-    }
-
-    const cleanOp = ch === '×' ? '*' : ch === '÷' ? '/' : ch;
-    if (['+', '-', '*', '/'].includes(cleanOp)) {
-      if (!editAmountStr.trim()) {
-        if (cleanOp === '-') {
-          setEditAmountStr('-');
-        } else {
-          setEditAmountStr(`0 ${cleanOp} `);
-        }
-        return;
-      }
-      const trimmed = editAmountStr.trimEnd();
-      if (/[+\-*\/]$/.test(trimmed)) {
-        setEditAmountStr(`${trimmed.slice(0, -1)} ${cleanOp} `);
-      } else {
-        setEditAmountStr(`${trimmed} ${cleanOp} `);
-      }
-    } else if (ch === '(' || ch === ')') {
-      setEditAmountStr((prev) => `${prev}${ch}`);
-    }
-  };
-
-  const handleEditAmountKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
-      if (isEditFormula && editFormulaEval.isValid && editFormulaEval.value !== null) {
-        e.preventDefault();
-        handleApplyEditFormula();
-      }
-    }
-  };
-
-  const handleEditAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value;
-    const sanitized = sanitizeFormulaInput(val);
-
-    if (!sanitized) {
-      setEditAmountStr('');
-      setEditForm((prev) => ({ ...prev, amount: 0 }));
-      return;
-    }
-
-    if (!containsFormula(sanitized)) {
-      const raw = sanitized.replace(/[^0-9]/g, '');
-      if (!raw) {
-        setEditAmountStr('');
-        setEditForm((prev) => ({ ...prev, amount: 0 }));
-        return;
-      }
-      const num = parseInt(raw, 10);
-      setEditAmountStr(num.toLocaleString('ko-KR'));
-      setEditForm((prev) => ({ ...prev, amount: num }));
-    } else {
-      setEditAmountStr(sanitized);
-    }
-  };
-
-  const handleEditAddAmount = (addVal: number) => {
-    if (isEditFormula && editFormulaEval.isValid && editFormulaEval.value !== null) {
-      const next = editFormulaEval.value + addVal;
-      setEditAmountStr(next.toLocaleString('ko-KR'));
-      setEditForm((prev) => ({ ...prev, amount: next }));
-    } else {
-      const current = Number(editForm.amount) || 0;
-      const next = current + addVal;
-      setEditAmountStr(next.toLocaleString('ko-KR'));
-      setEditForm((prev) => ({ ...prev, amount: next }));
-    }
-  };
-
-  const handleSetEditQuickDate = (offsetDays: number) => {
-    const d = new Date();
-    d.setDate(d.getDate() - offsetDays);
-    const dateStr = d.toISOString().slice(0, 10);
-    setEditForm((prev) => ({ ...prev, date: dateStr }));
-  };
-
-  const handleAddEditSubItem = () => {
-    setEditSubItems((prev) => [
-      ...prev,
-      {
-        id: `edit-sub-${Date.now()}-${prev.length}`,
-        name: '',
-        amount: 0,
-        quantity: 1,
-        unitPrice: 0,
-        category: editForm.category || '식비',
-      },
-    ]);
-  };
-
-  const handleUpdateEditSubItem = (id: string, field: keyof SubItem, value: any) => {
-    setEditSubItems((prev) =>
-      prev.map((item) => {
-        if (item.id === id) {
-          const updated = { ...item, [field]: value };
-          const currentQty = Math.max(1, Number(field === 'quantity' ? value : item.quantity || 1));
-
-          if (field === 'quantity') {
-            const newQty = Math.max(1, Number(value) || 1);
-            updated.quantity = newQty;
-            if (item.unitPrice && item.unitPrice > 0) {
-              updated.amount = item.unitPrice * newQty;
-            } else if (item.amount > 0) {
-              updated.unitPrice = Math.round(item.amount / newQty);
-            }
-          } else if (field === 'unitPrice') {
-            const newUnitPrice = Math.max(0, Number(value) || 0);
-            updated.unitPrice = newUnitPrice;
-            updated.amount = newUnitPrice * currentQty;
-          } else if (field === 'amount') {
-            const newAmount = Math.max(0, Number(value) || 0);
-            updated.amount = newAmount;
-            updated.unitPrice = Math.round(newAmount / currentQty);
-          }
-
-          return updated;
-        }
-        return item;
-      })
-    );
-  };
-
-  const handleRemoveEditSubItem = (id: string) => {
-    setEditSubItems((prev) => prev.filter((item) => item.id !== id));
-  };
-
-  const editSubItemsSum = useMemo(() => {
-    return editSubItems.reduce((acc, item) => acc + (Number(item.amount) || 0), 0);
-  }, [editSubItems]);
-
-  const handleSyncEditAmountWithSubItems = () => {
-    if (editSubItemsSum > 0) {
-      setEditAmountStr(editSubItemsSum.toLocaleString('ko-KR'));
-      setEditForm((prev) => ({ ...prev, amount: editSubItemsSum }));
-    }
-  };
-
-  const applyEditPreset = (presetType: 'coupang' | 'mart') => {
-    if (presetType === 'coupang') {
-      const items = [
-        { id: `edit-p1`, name: '신선란 30구', quantity: 1, unitPrice: 8900, amount: 8900, category: '식비' },
-        { id: `edit-p2`, name: '서울우유 2.3L', quantity: 2, unitPrice: 3225, amount: 6450, category: '식비' },
-        { id: `edit-p3`, name: '롤화장지 30롤', quantity: 1, unitPrice: 19800, amount: 19800, category: '생활용품' },
-      ];
-      setEditSubItems(items);
-      const total = items.reduce((a, b) => a + b.amount, 0);
-      setEditAmountStr(total.toLocaleString('ko-KR'));
-      setEditForm((prev) => ({ ...prev, amount: total }));
-    } else {
-      const items = [
-        { id: `edit-p1`, name: '소고기 등심 300g', quantity: 1, unitPrice: 28000, amount: 28000, category: '식비' },
-        { id: `edit-p2`, name: '양파 & 대파', quantity: 1, unitPrice: 6500, amount: 6500, category: '식비' },
-        { id: `edit-p3`, name: '주방세제 리필', quantity: 2, unitPrice: 3750, amount: 7500, category: '생활용품' },
-      ];
-      setEditSubItems(items);
-      const total = items.reduce((a, b) => a + b.amount, 0);
-      setEditAmountStr(total.toLocaleString('ko-KR'));
-      setEditForm((prev) => ({ ...prev, amount: total }));
-    }
-  };
-
-  // Submit Edit to Google Sheets
-  const handleSaveEdit = async () => {
-    if (!editModalTx) return;
-    let numAmount = 0;
-    if (isEditFormula) {
-      if (editFormulaEval.isValid && editFormulaEval.value !== null) {
-        numAmount = editFormulaEval.value;
-        setEditAmountStr(editFormulaEval.formatted || String(editFormulaEval.value));
-        setEditForm((prev) => ({ ...prev, amount: numAmount }));
-      } else {
-        alert(editFormulaEval.error || '금액 수식이 올바르지 않습니다. 확인 후 다시 시도해 주세요.');
-        return;
-      }
-    } else {
-      numAmount =
-        typeof editForm.amount === 'number' && editForm.amount > 0
-          ? editForm.amount
-          : parseInt(editAmountStr.replace(/[^0-9]/g, ''), 10) || 0;
-    }
-
-    if (!editForm.description?.trim()) {
-      alert('내용/사용처를 입력해 주세요.');
-      return;
-    }
-    if (!numAmount || numAmount <= 0) {
-      alert('금액을 올바르게 입력해 주세요.');
-      return;
-    }
-
-    setIsSubmittingEdit(true);
-    try {
-      const validSubItems = editSubItems
-        .filter((item) => item.name.trim().length > 0 || (Number(item.amount) || 0) > 0)
-        .map((item) => {
-          const qty = Math.max(1, Number(item.quantity) || 1);
-          const amt = Math.max(0, Number(item.amount) || 0);
-          const uPrice = item.unitPrice !== undefined && item.unitPrice > 0 ? item.unitPrice : Math.round(amt / qty);
-          return {
-            ...item,
-            name: item.name.trim() || '품목',
-            quantity: qty,
-            unitPrice: uPrice,
-            amount: amt,
-            category: item.category || editForm.category || '식비',
-          };
-        });
-
-      const isRec = Boolean(editForm.isRecurring);
-      const isSpec = Boolean(editForm.isSpecial);
-
-      // Extract existing user memo without old serialized sub-items or recurring/special tags
-      const cleanBaseMemo = (editForm.memo || '')
-        .replace(/\[세부품목:[\s\S]*?\]/g, '')
-        .replace(/\[정기예산\]/g, '')
-        .replace(/\[고정지출\]/g, '')
-        .replace(/\[정기지출\]/g, '')
-        .replace(/\[특별지출\]/g, '')
-        .replace(/\[비정기지출\]/g, '')
-        .trim();
-
-      let finalMemo =
-        validSubItems.length > 0
-          ? serializeSubItemsToMemo(cleanBaseMemo, validSubItems)
-          : cleanBaseMemo;
-
-      if (isRec) {
-        finalMemo = finalMemo ? `[정기예산] ${finalMemo}` : '[정기예산]';
-      } else if (isSpec) {
-        finalMemo = finalMemo ? `[특별지출] ${finalMemo}` : '[특별지출]';
-      }
-
-      const updatedTx: Transaction = {
-        ...editModalTx,
-        date: editForm.date || editModalTx.date,
-        type: editForm.type || editModalTx.type,
-        category: editForm.category || editModalTx.category,
-        description: editForm.description.trim(),
-        amount: numAmount,
-        paymentMethod: editForm.paymentMethod || '',
-        isRecurring: isRec || undefined,
-        isSpecial: isSpec || undefined,
-        memo: finalMemo,
-        subItems: validSubItems.length > 0 ? validSubItems : undefined,
-      };
-
-
-      saveSubItemsForTransaction(updatedTx, validSubItems);
-      await onEditTransaction(updatedTx);
-      setEditModalTx(null);
-    } catch (err: any) {
-      console.error('Save edit error:', err);
-    } finally {
-      setIsSubmittingEdit(false);
-    }
   };
 
   // Direct Single Delete from Google Sheet
@@ -1478,6 +1166,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
     setIsProcessingBatchCategory(true);
     try {
+      const existsInCustom = customCategories.some(
+        (c) => c.name.trim().toLowerCase() === finalCategory.toLowerCase()
+      );
+      if (!existsInCustom && onAddCustomCategory) {
+        onAddCustomCategory(finalCategory, 'expense');
+      }
       if (onBatchUpdateCategory) {
         await onBatchUpdateCategory(targets, finalCategory);
       } else {
@@ -1488,6 +1182,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
       setSelectedIds(new Set());
       setIsSelectionMode(false);
       setIsBatchCategoryModalOpen(false);
+      setBatchCategorySearch('');
+      setBatchCategoryCustom('');
     } catch (err: any) {
       console.error('Batch category update failed:', err);
       alert(`카테고리 일괄 변경 중 오류가 발생했습니다: ${err?.message || err}`);
@@ -2125,6 +1821,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
                       ? 'bg-amber-500 text-white border-amber-600'
                       : selectedRecurringFilter === 'recurring'
                       ? 'bg-purple-600 text-white border-purple-700'
+                      : selectedRecurringFilter === 'installment'
+                      ? 'bg-indigo-600 text-white border-indigo-700'
                       : 'bg-blue-600 text-white border-blue-700'
                     : 'bg-white border-slate-200 text-slate-700'
                 }`}
@@ -2135,6 +1833,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 <option value="recurring">📌 고정 예산만</option>
                 <option value="special">🛋️ 특별(비정기)만</option>
                 <option value="variable">변동 전체(일상+특별)</option>
+                <option value="installment">💳 할부 지출만</option>
               </select>
 
               {/* 1-Click Toggle: Exclude Special Expense */}
@@ -2179,6 +1878,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   {amountSignMode === 'positive' ? '₩+' : '±'}
                 </span>
                 <span>{amountSignMode === 'positive' ? '양수 통일' : '부호 표기'}</span>
+              </button>
+
+              {/* Card Installment Tracker Modal Button */}
+              <button
+                type="button"
+                onClick={() => setIsInstallmentModalOpen(true)}
+                className={`px-2 py-1 border rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 ${
+                  mergedInstallmentOverview.totalCount > 0
+                    ? 'bg-indigo-50 border-indigo-300 text-indigo-800 hover:bg-indigo-100'
+                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+                title="카드 할부 내역 모아보기 및 잔여 회차 관리"
+              >
+                <CreditCard className="w-3 h-3 text-indigo-600" />
+                <span>할부 현황</span>
+                {mergedInstallmentOverview.totalCount > 0 && (
+                  <span className="px-1 py-0.2 rounded bg-indigo-600 text-white text-[9px] font-black leading-none">
+                    {mergedInstallmentOverview.totalCount}
+                  </span>
+                )}
               </button>
 
               {/* Reset Filters Button (appears when any filter is active) */}
@@ -2355,7 +2074,30 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {filteredTransactions.map((t) => {
+                  {filteredTransactions.map((t, idx) => {
+                    const prevTx = idx > 0 ? filteredTransactions[idx - 1] : null;
+                    const getDateGroupKey = (dateStr?: string): string => {
+                      if (!dateStr) return '';
+                      const short = formatShortDate(dateStr);
+                      const yearMatch = String(dateStr).trim().match(/^(\d{4})/);
+                      return yearMatch ? `${yearMatch[1]}-${short}` : short;
+                    };
+                    const showDateDivider = Boolean(
+                      prevTx &&
+                        sortField !== 'amount' &&
+                        getDateGroupKey(prevTx.date) !== getDateGroupKey(t.date)
+                    );
+                    const dateDividerRow = showDateDivider ? (
+                      <tr aria-hidden="true" className="pointer-events-none">
+                        <td
+                          colSpan={isSelectionMode ? 6 : 5}
+                          className="p-0 border-0 bg-slate-100/90"
+                        >
+                          <div className="h-[3px] border-t-2 border-slate-400/75 bg-slate-100" />
+                        </td>
+                      </tr>
+                    ) : null;
+
                     const isSelected = selectedIds.has(t.id);
                     const hasSubItems = Boolean(t.subItems && t.subItems.length > 0);
                     const isTxRecurring = Boolean(
@@ -2379,6 +2121,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
                       return (
                         <React.Fragment key={t.id}>
+                          {dateDividerRow}
                           {/* 묶음 박스 상단 헤더: 원래 항목 이름(쿠팡, 이마트 등)을 상단에 1회만 표시 */}
                           <tr
                             onClick={() => handleOpenEditModal(t)}
@@ -2449,6 +2192,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   >
                                     {t.description}
                                   </span>
+                                  {(() => {
+                                    const instMeta = parseInstallmentMeta(t);
+                                    if (!instMeta) return null;
+                                    return (
+                                      <span
+                                        className="text-[9px] font-black text-indigo-700 bg-indigo-100 px-1.5 py-0.2 rounded border border-indigo-300 shrink-0 whitespace-nowrap"
+                                        title={`할부 ${instMeta.current}/${instMeta.total}${instMeta.rateLabel ? ` · ${instMeta.rateLabel}` : ''}`}
+                                      >
+                                        💳 {instMeta.current}/{instMeta.total}
+                                      </span>
+                                    );
+                                  })()}
                                 </div>
 
                                 {/* 모바일 보조 라인: 분류 태그 & 묶음 세부 품목 개수 */}
@@ -2705,9 +2460,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     const isIncome = t.type === 'income';
 
                     return (
-                      <tr
-                        key={t.id}
-                        onMouseDown={() => startLongPress(t.id)}
+                      <React.Fragment key={t.id}>
+                        {dateDividerRow}
+                        <tr
+                          onMouseDown={() => startLongPress(t.id)}
                         onMouseUp={cancelLongPress}
                         onMouseLeave={cancelLongPress}
                         onTouchStart={() => startLongPress(t.id)}
@@ -2807,6 +2563,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
                                   입금
                                 </span>
                               )}
+                              {(() => {
+                                const instMeta = parseInstallmentMeta(t);
+                                if (!instMeta) return null;
+                                return (
+                                  <span
+                                    className="text-[9px] font-black text-indigo-700 bg-indigo-100 px-1.5 py-0.2 rounded border border-indigo-300 shrink-0 whitespace-nowrap"
+                                    title={`카드 할부 ${instMeta.current}/${instMeta.total}${instMeta.rateLabel ? ` · ${instMeta.rateLabel}` : ''}${instMeta.totalPrincipal ? ` · 원금 ${instMeta.totalPrincipal.toLocaleString('ko-KR')}원` : ''}`}
+                                  >
+                                    💳 {instMeta.current}/{instMeta.total}
+                                  </span>
+                                );
+                              })()}
                             </div>
 
                             {/* 모바일 보조 라인: 분류 태그 & 메모 */}
@@ -2918,6 +2686,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                           </div>
                         </td>
                       </tr>
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
@@ -3208,49 +2977,108 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
               {/* Target Category Selection */}
               <div>
-                <label className="block text-xs font-black text-slate-700 mb-2">
-                  새로 적용할 카테고리 선택
-                </label>
-
-                {/* Popular Categories Chips */}
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  {(availableCategories && availableCategories.length > 0
-                    ? availableCategories
-                    : [
-                        '식비',
-                        '카페/간식',
-                        '생활용품',
-                        '주거/통신',
-                        '교통비',
-                        '쇼핑',
-                        '문화/여가',
-                        '의료/건강',
-                        '교육',
-                        '용돈',
-                        '세금/이자',
-                        '기타',
-                      ]
-                  ).map((cat) => {
-                    const isSelected = batchTargetCategory === cat && !batchCategoryCustom;
-                    return (
+                <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                  <label className="text-xs font-black text-slate-700">
+                    새로 적용할 카테고리 선택
+                  </label>
+                  <div className="relative">
+                    <Search className="w-3 h-3 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={batchCategorySearch}
+                      onChange={(e) => setBatchCategorySearch(e.target.value)}
+                      placeholder="전체 분류 검색·추가"
+                      className="w-44 pl-6 pr-6 py-1 bg-white border border-slate-300 rounded-lg text-[11px] font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-indigo-600"
+                    />
+                    {batchCategorySearch && (
                       <button
-                        key={cat}
                         type="button"
-                        onClick={() => {
-                          setBatchTargetCategory(cat);
-                          setBatchCategoryCustom('');
-                        }}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-                          isSelected
-                            ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400 ring-offset-1'
-                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                        }`}
+                        onClick={() => setBatchCategorySearch('')}
+                        className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
                       >
-                        {cat}
+                        <X className="w-3 h-3" />
                       </button>
-                    );
-                  })}
+                    )}
+                  </div>
                 </div>
+
+                {/* Global Categories Search & Chips */}
+                {(() => {
+                  const fallbackCats = [
+                    '식비', '카페/간식', '생활용품', '주거/통신', '교통비', '쇼핑',
+                    '문화/여가', '의료/건강', '교육', '용돈', '세금/이자', '기타',
+                  ];
+                  const q = batchCategorySearch.trim().toLowerCase();
+                  const visibleList =
+                    availableCategories && availableCategories.length > 0 ? availableCategories : fallbackCats;
+                  const hiddenMap = new Map<string, boolean>();
+                  customCategories.forEach((c) => {
+                    if (!c.isVisible && c.name) hiddenMap.set(c.name, true);
+                  });
+                  const fullPool = Array.from(
+                    new Set([
+                      ...visibleList,
+                      ...customCategories.map((c) => c.name),
+                      ...(analysis?.detectedCategories || []).map((c) => c.name),
+                      ...allCategories,
+                      ...fallbackCats,
+                    ])
+                  ).filter(Boolean);
+                  const displayList = q
+                    ? fullPool.filter((c) => c.toLowerCase().includes(q))
+                    : visibleList;
+                  const hasExact = q ? fullPool.some((c) => c.toLowerCase() === q) : true;
+
+                  return (
+                    <div className="flex flex-wrap gap-1.5 mb-3 max-h-40 overflow-y-auto pr-1">
+                      {displayList.map((cat) => {
+                        const isSelected = batchTargetCategory === cat && !batchCategoryCustom;
+                        const isHidden = hiddenMap.get(cat);
+                        return (
+                          <button
+                            key={cat}
+                            type="button"
+                            onClick={() => {
+                              setBatchTargetCategory(cat);
+                              setBatchCategoryCustom('');
+                            }}
+                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer flex items-center gap-1 ${
+                              isSelected
+                                ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400 ring-offset-1'
+                                : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                            }`}
+                          >
+                            <span>{cat}</span>
+                            {isHidden && (
+                              <span
+                                className={`text-[9px] font-bold px-1 rounded-sm ${
+                                  isSelected ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-600'
+                                }`}
+                              >
+                                숨김
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })}
+                      {q && !hasExact && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const newCat = batchCategorySearch.trim();
+                            setBatchCategoryCustom(newCat);
+                            setBatchTargetCategory('');
+                            setBatchCategorySearch('');
+                          }}
+                          className="px-3 py-1.5 rounded-xl text-xs font-black bg-indigo-600 hover:bg-indigo-700 text-white transition cursor-pointer flex items-center gap-1"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>"{batchCategorySearch.trim()}" 새 분류 적용</span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
 
                 {/* Or Direct Input */}
                 <div className="mt-2">
@@ -3336,963 +3164,51 @@ export const Dashboard: React.FC<DashboardProps> = ({
         />
       )}
 
-      {/* 5. Edit Transaction Modal (Direct Google Sheet Synchronized & Unified UX) */}
+      {/* 5. Edit Transaction Modal (Unified with ExpenseInputForm) */}
       {editModalTx && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-150 overflow-y-auto">
-          <div className="w-full max-w-xl bg-white rounded-2xl shadow-2xl border-2 border-slate-300 overflow-hidden my-auto flex flex-col max-h-[92vh]">
-            {/* Modal Header Banner matching ExpenseInputForm */}
-            <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shrink-0">
-                  <Edit2 className="w-5 h-5" />
-                </div>
-                <div className="min-w-0">
-                  <h2 className="text-base font-black tracking-tight whitespace-nowrap">가계부 내역 수정</h2>
-                  <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-300 whitespace-nowrap overflow-x-auto scrollbar-none">
-                    <span className="text-slate-400">[{editModalTx.sheetTitle || activeSheetTitle}] 시트</span>
-                    {editModalTx.rowIndex && (
-                      <>
-                        <span className="text-slate-500">•</span>
-                        <span>{editModalTx.rowIndex}행</span>
-                      </>
-                    )}
-                    {isRealGoogleConnected && (
-                      <>
-                        <span className="text-slate-500">•</span>
-                        <span className="text-emerald-400 font-bold">Google 시트 실시간 반영</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                disabled={isSubmittingEdit}
-                onClick={() => setEditModalTx(null)}
-                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer shrink-0"
-                title="닫기"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Modal Form Body */}
-            <div className="p-5 sm:p-6 space-y-4 bg-white overflow-y-auto flex-1">
-              {/* Dynamic target month notification */}
-              <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between gap-2 text-xs text-blue-950 font-bold whitespace-nowrap overflow-x-auto scrollbar-none">
-                <div className="flex items-center gap-2 shrink-0">
-                  <Info className="w-4 h-4 text-blue-600 shrink-0" />
-                  <span>
-                    거래 일자: <strong className="text-blue-900 underline">{formatShortDate(editForm.date || '')}</strong> <span className="text-blue-600 text-[11px] font-normal">({editForm.date})</span>
-                  </span>
-                </div>
-                <span className="px-2 py-0.5 bg-blue-600 text-white rounded-md text-[11px] font-extrabold shrink-0">
-                  {editModalTx.sheetTitle || activeSheetTitle} 시트에 수정 반영
-                </span>
-              </div>
-
-              {/* 1. Date Selection with Quick Buttons */}
-              <div>
-                <label className="block text-xs font-black text-slate-700 mb-1.5 flex items-center gap-1 whitespace-nowrap">
-                  <Calendar className="w-3.5 h-3.5 text-blue-600" />
-                  <span>지출/수입 날짜</span>
-                </label>
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    type="date"
-                    value={editForm.date || ''}
-                    onChange={(e) => setEditForm({ ...editForm, date: e.target.value })}
-                    className="flex-1 min-w-[150px] px-3.5 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-xs sm:text-sm font-bold text-slate-900 focus:outline-none focus:border-blue-600"
-                    required
-                  />
-                  <div className="flex items-center gap-1 shrink-0 whitespace-nowrap">
-                    <button
-                      type="button"
-                      onClick={() => handleSetEditQuickDate(0)}
-                      className="px-3 py-2 text-xs font-bold rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition cursor-pointer"
-                    >
-                      오늘
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleSetEditQuickDate(1)}
-                      className="px-3 py-2 text-xs font-bold rounded-xl bg-slate-100 text-slate-700 hover:bg-slate-200 transition cursor-pointer"
-                    >
-                      어제
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* 2. Transaction Type Segmented Pills */}
-              <div>
-                <label className="block text-xs font-black text-slate-700 mb-1.5 whitespace-nowrap">거래 구분</label>
-                <div className="grid grid-cols-3 gap-2 p-1 bg-slate-100 rounded-xl">
-                  <button
-                    type="button"
-                    onClick={() => handleEditTypeChange('expense')}
-                    className={`flex items-center justify-center gap-1.5 py-2 rounded-lg font-bold text-xs sm:text-sm transition cursor-pointer ${
-                      editForm.type === 'expense'
-                        ? 'bg-rose-600 text-white shadow-xs'
-                        : 'text-slate-700 hover:text-slate-900'
-                    }`}
-                  >
-                    <TrendingDown className="w-4 h-4" />
-                    <span>지출</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleEditTypeChange('income')}
-                    className={`flex items-center justify-center gap-1.5 py-2 rounded-lg font-bold text-xs sm:text-sm transition cursor-pointer ${
-                      editForm.type === 'income'
-                        ? 'bg-emerald-600 text-white shadow-xs'
-                        : 'text-slate-700 hover:text-slate-900'
-                    }`}
-                  >
-                    <TrendingUp className="w-4 h-4" />
-                    <span>수입</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleEditTypeChange('transfer')}
-                    className={`flex items-center justify-center gap-1.5 py-2 rounded-lg font-bold text-xs sm:text-sm transition cursor-pointer ${
-                      editForm.type === 'transfer'
-                        ? 'bg-sky-600 text-white shadow-xs'
-                        : 'text-slate-700 hover:text-slate-900'
-                    }`}
-                  >
-                    <ArrowLeftRight className="w-4 h-4" />
-                    <span>이체/저축</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* 3. Amount Input with Formula Calculator & Quick Add */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5 whitespace-nowrap">
-                  <label className="text-xs font-black text-slate-700 flex items-center gap-1.5">
-                    <Calculator className="w-3.5 h-3.5 text-blue-600" />
-                    <span>금액</span>
-                    <span className="text-red-500">*</span>
-                  </label>
-                  <span className="text-[11px] text-slate-500 font-medium">
-                    직접 숫자나 수식(+, -, *, /, 괄호) 입력 가능
-                  </span>
-                </div>
-
-                <div className="relative">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xl font-black text-slate-500 select-none">
-                    ₩
-                  </span>
-                  <input
-                    type="text"
-                    inputMode="text"
-                    placeholder="0 (수식 입력 가능: 15000 + 4500, 3000 * 3)"
-                    value={editAmountStr}
-                    onChange={handleEditAmountChange}
-                    onKeyDown={handleEditAmountKeyDown}
-                    className="w-full pl-10 pr-24 py-3 bg-white border-2 border-slate-300 rounded-xl text-xl sm:text-2xl font-black text-slate-900 placeholder:text-slate-300 focus:outline-none focus:border-blue-600 transition"
-                    required
-                  />
-                  {isEditFormula && editFormulaEval.isValid && editFormulaEval.value !== null && (
-                    <button
-                      type="button"
-                      onClick={handleApplyEditFormula}
-                      className="absolute right-2.5 top-1/2 -translate-y-1/2 px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white text-xs font-black rounded-lg shadow-sm flex items-center gap-1 transition cursor-pointer"
-                      title="계산 결과를 금액으로 확정"
-                    >
-                      <span>= 계산</span>
-                    </button>
-                  )}
-                </div>
-
-                {/* Real-time Formula Preview */}
-                {isEditFormula && (
-                  <div
-                    className={`mt-2 p-2.5 rounded-xl border flex items-center justify-between text-xs transition animate-in fade-in duration-150 ${
-                      editFormulaEval.isValid && editFormulaEval.value !== null
-                        ? 'bg-blue-50/80 border-blue-200 text-blue-900'
-                        : 'bg-amber-50/80 border-amber-200 text-amber-800'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="font-extrabold text-xs px-1.5 py-0.5 rounded bg-white/90 border border-current shadow-2xs">
-                        수식
-                      </span>
-                      {editFormulaEval.isValid && editFormulaEval.value !== null ? (
-                        <span className="font-bold">
-                          계산 결과: <span className="text-base font-black text-blue-700">₩{editFormulaEval.formatted}원</span>
-                          <span className="text-[11px] font-normal text-slate-500 ml-1.5">
-                            (Enter 또는 [= 계산] 클릭 시 적용)
-                          </span>
-                        </span>
-                      ) : (
-                        <span className="font-medium text-amber-700">
-                          {editFormulaEval.error || '수식 입력 중... (예: 15000 + 4500, (3000 * 2) + 1500)'}
-                        </span>
-                      )}
-                    </div>
-                    {editFormulaEval.isValid && editFormulaEval.value !== null && (
-                      <button
-                        type="button"
-                        onClick={handleApplyEditFormula}
-                        className="text-xs font-bold text-blue-700 hover:underline cursor-pointer shrink-0 ml-2"
-                      >
-                        적용하기
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {/* Quick Amount Buttons */}
-                <div className="flex items-center justify-between gap-1.5 mt-2">
-                  <span className="text-[11px] font-bold text-slate-500">빠른 금액 추가:</span>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {[10000, 30000, 50000, 100000].map((val) => (
-                      <button
-                        key={val}
-                        type="button"
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => handleEditAddAmount(val)}
-                        className="px-2.5 py-1 text-xs font-extrabold bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg transition active:scale-95 cursor-pointer border border-slate-200 whitespace-nowrap"
-                      >
-                        +{val / 10000}만
-                      </button>
-                    ))}
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => {
-                        setEditAmountStr('');
-                        setEditForm((prev) => ({ ...prev, amount: 0 }));
-                      }}
-                      className="p-1 text-xs font-bold text-slate-500 hover:text-slate-800 rounded-lg cursor-pointer ml-1"
-                      title="금액 지우기"
-                    >
-                      <RotateCcw className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* 4. Description (사용처 / 내용) */}
-              <div>
-                <label className="block text-xs font-black text-slate-700 mb-1.5 whitespace-nowrap">
-                  사용처 / 내용 <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="예: 마트 장보기, 스타벅스, 식사..."
-                  value={editForm.description || ''}
-                  onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                  className="w-full px-4 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-sm font-bold text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-600 transition"
-                  required
-                />
-              </div>
-
-              {/* 4.5. Budget Classification in Edit Modal (고정 지출 & 특별 지출) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {/* 고정 지출 (정기 예산) */}
-                <div
-                  className={`px-3 py-2 rounded-xl border flex items-center justify-between gap-2 text-xs transition ${
-                    editForm.isRecurring
-                      ? 'bg-purple-50/90 border-purple-300 text-purple-900 shadow-2xs'
-                      : 'bg-slate-50 border-slate-200 text-slate-700'
-                  }`}
-                >
-                  <label className="flex items-center gap-2 cursor-pointer select-none shrink-0">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(editForm.isRecurring)}
-                      onChange={(e) => {
-                        const checked = e.target.checked;
-                        setEditForm((prev) => ({
-                          ...prev,
-                          isRecurring: checked,
-                          isSpecial: checked ? false : prev.isSpecial,
-                        }));
-                      }}
-                      className="w-4 h-4 text-purple-600 rounded border-purple-300 focus:ring-purple-500 cursor-pointer"
-                    />
-                    <span className="font-black text-xs flex items-center gap-1">
-                      <span>📌 고정 지출 (정기 예산)</span>
-                      {editForm.isRecurring && (
-                        <span className="text-[10px] font-black text-purple-700 bg-purple-100 px-1 py-0.2 rounded border border-purple-200">
-                          적용
-                        </span>
-                      )}
-                    </span>
-                  </label>
-
-                  <div className="flex items-center gap-1 overflow-x-auto scrollbar-none pl-1">
-                    <span className="text-[10px] text-slate-400 font-bold shrink-0 hidden sm:inline">추천:</span>
-                    {[
-                      { name: '관리비', cat: '관리비_기타', pay: '자동이체' },
-                      { name: '통신비', cat: '통신비', pay: '자동이체' },
-                      { name: '보험료', cat: '보험료', pay: '자동이체' },
-                      { name: '구독', cat: '구독', pay: '신용카드' },
-                      { name: '대출', cat: '대출_원금', pay: '자동이체' },
-                    ].map((preset) => (
-                      <button
-                        key={preset.name}
-                        type="button"
-                        onClick={() => {
-                          setEditForm((prev) => ({
-                            ...prev,
-                            isRecurring: true,
-                            isSpecial: false,
-                            description: prev.description || preset.name,
-                            category: preset.cat,
-                            paymentMethod: preset.pay,
-                          }));
-                        }}
-                        className="px-2 py-0.5 bg-white hover:bg-purple-100 border border-slate-200 hover:border-purple-300 text-slate-600 hover:text-purple-900 rounded-lg text-[11px] font-bold transition shrink-0 cursor-pointer whitespace-nowrap"
-                      >
-                        {preset.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* 특별/비정기 지출 (침대, 가전, 이사, 여행 등) */}
-                <div
-                  className={`px-3 py-2 rounded-xl border flex items-center justify-between gap-2 text-xs transition ${
-                    editForm.isSpecial
-                      ? 'bg-amber-50/90 border-amber-300 text-amber-900 shadow-2xs'
-                      : 'bg-slate-50 border-slate-200 text-slate-700'
-                  }`}
-                >
-                  <label className="flex items-center gap-2 cursor-pointer select-none shrink-0">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(editForm.isSpecial)}
-                      onChange={(e) => {
-                        const checked = e.target.checked;
-                        setEditForm((prev) => ({
-                          ...prev,
-                          isSpecial: checked,
-                          isRecurring: checked ? false : prev.isRecurring,
-                        }));
-                      }}
-                      className="w-4 h-4 text-amber-600 rounded border-amber-300 focus:ring-amber-500 cursor-pointer"
-                    />
-                    <span className="font-black text-xs flex items-center gap-1">
-                      <span>🛋️ 특별(비정기) 지출</span>
-                      {editForm.isSpecial && (
-                        <span className="text-[10px] font-black text-amber-700 bg-amber-100 px-1 py-0.2 rounded border border-amber-200">
-                          적용
-                        </span>
-                      )}
-                    </span>
-                  </label>
-
-                  <div className="flex items-center gap-1 overflow-x-auto scrollbar-none pl-1">
-                    <span className="text-[10px] text-slate-400 font-bold shrink-0 hidden sm:inline">추천:</span>
-                    {[
-                      { name: '침대/가구', cat: '생활용품', pay: '신용카드' },
-                      { name: '가전제품', cat: '생활용품', pay: '신용카드' },
-                      { name: '이사/수리', cat: '관리비_기타', pay: '계좌이체' },
-                      { name: '여행비', cat: '여행비', pay: '신용카드' },
-                      { name: '경조사', cat: '경조사', pay: '계좌이체' },
-                    ].map((preset) => (
-                      <button
-                        key={preset.name}
-                        type="button"
-                        onClick={() => {
-                          setEditForm((prev) => ({
-                            ...prev,
-                            isSpecial: true,
-                            isRecurring: false,
-                            description: prev.description || preset.name,
-                            category: preset.cat,
-                            paymentMethod: preset.pay,
-                          }));
-                        }}
-                        className="px-2 py-0.5 bg-white hover:bg-amber-100 border border-slate-200 hover:border-amber-300 text-slate-600 hover:text-amber-900 rounded-lg text-[11px] font-bold transition shrink-0 cursor-pointer whitespace-nowrap"
-                      >
-                        {preset.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-
-              {/* 5. Category Chips with Direct Input */}
-              <div>
-
-                <div className="flex items-center justify-between mb-1.5 whitespace-nowrap">
-                  <div className="flex items-center gap-1.5">
-                    <label className="text-xs font-black text-slate-700 flex items-center gap-1">
-                      <Tag className="w-3.5 h-3.5 text-blue-600" />
-                      <span>
-                        {editForm.type === 'income' ? '수입 분류' : editForm.type === 'transfer' ? '이체 분류' : '지출 분류'} ({editModalCategories.length}개)
-                      </span>
-                    </label>
-                    <span className="text-[10px] text-slate-500 font-bold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
-                      지난달까지 빈도순
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {onOpenCategoryManager && (
-                      <button
-                        type="button"
-                        onClick={onOpenCategoryManager}
-                        className="flex items-center gap-1 text-[11px] font-bold text-slate-600 hover:text-blue-600 cursor-pointer"
-                        title="카테고리 및 결제수단 관리 열기"
-                      >
-                        <Settings className="w-3 h-3 text-slate-500" />
-                        <span>항목 설정</span>
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setCustomCategoryInput(!customCategoryInput)}
-                      className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
-                    >
-                      {customCategoryInput ? '목록 선택' : '+ 직접 입력'}
-                    </button>
-                  </div>
-                </div>
-
-                {customCategoryInput ? (
-                  <div className="flex items-center gap-2 whitespace-nowrap">
-                    <input
-                      type="text"
-                      placeholder="새 분류 이름 직접 입력..."
-                      value={newCategoryText}
-                      onChange={(e) => setNewCategoryText(e.target.value)}
-                      className="flex-1 px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold focus:border-blue-600"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (newCategoryText.trim()) {
-                          setEditForm((prev) => ({ ...prev, category: newCategoryText.trim() }));
-                          setCustomCategoryInput(false);
-                        }
-                      }}
-                      className="px-3 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl hover:bg-blue-700 cursor-pointer shrink-0"
-                    >
-                      적용
-                    </button>
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
-                    {editModalCategories.map((cat) => {
-                      const stat = editCategoryStatsMap.get(cat);
-                      const displayCount = stat?.displayCount || 0;
-                      const label = stat?.displayLabel || '신규/미사용 분류';
-                      return (
-                        <button
-                          key={cat}
-                          type="button"
-                          onClick={() => setEditForm({ ...editForm, category: cat })}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer whitespace-nowrap flex items-center gap-1 ${
-                            editForm.category === cat
-                              ? editForm.type === 'expense'
-                                ? 'bg-rose-600 text-white shadow-sm'
-                                : editForm.type === 'income'
-                                ? 'bg-emerald-600 text-white shadow-sm'
-                                : 'bg-sky-600 text-white shadow-sm'
-                              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-200'
-                          }`}
-                          title={label}
-                        >
-                          <span>{cat}</span>
-                          {displayCount > 0 && (
-                            <span
-                              className={`text-[9px] font-bold px-1 rounded-sm ${
-                                editForm.category === cat ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-500'
-                              }`}
-                            >
-                              {displayCount}
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* 6. Payment Method Chips with Expand and Direct Input */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5 whitespace-nowrap">
-                  <div className="flex items-center gap-1.5">
-                    <label className="text-xs font-black text-slate-700 flex items-center gap-1">
-                      <CreditCard className="w-3.5 h-3.5 text-blue-600" />
-                      <span>결제 수단 ({allPaymentMethods.length}개)</span>
-                    </label>
-                    {allPaymentMethods.length > 8 && (
-                      <button
-                        type="button"
-                        onClick={() => setShowAllPaymentMethods(!showAllPaymentMethods)}
-                        className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer flex items-center gap-0.5"
-                      >
-                        {showAllPaymentMethods ? (
-                          <>
-                            <span>접기</span>
-                            <ChevronUp className="w-3 h-3" />
-                          </>
-                        ) : (
-                          <>
-                            <span>+{allPaymentMethods.length - 8}개 더보기</span>
-                            <ChevronDown className="w-3 h-3" />
-                          </>
-                        )}
-                      </button>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {onOpenCategoryManager && (
-                      <button
-                        type="button"
-                        onClick={onOpenCategoryManager}
-                        className="flex items-center gap-1 text-[11px] font-bold text-slate-500 hover:text-blue-600 cursor-pointer"
-                      >
-                        <Settings className="w-3 h-3" />
-                        <span>관리</span>
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setCustomPaymentInput(!customPaymentInput)}
-                      className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
-                    >
-                      {customPaymentInput ? '목록 선택' : '+ 직접 입력'}
-                    </button>
-                  </div>
-                </div>
-
-                {customPaymentInput && (
-                  <div className="flex items-center gap-2 mb-2 whitespace-nowrap">
-                    <input
-                      type="text"
-                      placeholder="새 결제 수단 직접 입력..."
-                      value={newPaymentText}
-                      onChange={(e) => setNewPaymentText(e.target.value)}
-                      className="flex-1 px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold focus:border-blue-600"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const trimmed = newPaymentText.trim();
-                        if (trimmed) {
-                          setEditForm((prev) => ({ ...prev, paymentMethod: trimmed }));
-                          if (onAddCustomPaymentMethod) onAddCustomPaymentMethod(trimmed);
-                          setNewPaymentText('');
-                          setCustomPaymentInput(false);
-                        }
-                      }}
-                      className="px-3 py-2 bg-blue-600 text-white text-xs font-bold rounded-xl hover:bg-blue-700 cursor-pointer shrink-0"
-                    >
-                      적용
-                    </button>
-                  </div>
-                )}
-
-                <div className="flex flex-wrap gap-1.5">
-                  {(showAllPaymentMethods ? allPaymentMethods : allPaymentMethods.slice(0, 8)).map((pm) => {
-                    const stat = paymentStatsMap.get(pm);
-                    const displayCount = stat?.displayCount || 0;
-                    const label = stat?.displayLabel || undefined;
-                    const badge = getPaymentGroupBadge(pm);
-                    const isSelected = editForm.paymentMethod === pm;
-                    return (
-                      <button
-                        key={pm}
-                        type="button"
-                        onClick={() => setEditForm({ ...editForm, paymentMethod: pm })}
-                        className={`px-2.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
-                          isSelected
-                            ? 'bg-indigo-600 text-white shadow-sm'
-                            : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
-                        }`}
-                        title={label || `${badge?.group || '결제수단'}`}
-                      >
-                        {badge && (
-                          <span
-                            className={`w-3.5 h-3.5 text-[9px] font-black rounded flex items-center justify-center shrink-0 ${
-                              isSelected
-                                ? 'bg-white/20 text-white border border-white/30'
-                                : `${badge.colorClass}`
-                            }`}
-                          >
-                            {badge.char}
-                          </span>
-                        )}
-                        <span>{pm}</span>
-                        {displayCount > 0 && (
-                          <span
-                            className={`text-[9px] font-bold px-1 rounded-sm ${
-                              isSelected ? 'bg-white/25 text-white' : 'bg-slate-100 text-slate-500'
-                            }`}
-                          >
-                            {displayCount}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-
-              {/* 7. Sub-item Breakdown Management (쿠팡, 마트 등 복합 결제) */}
-              <div className="border border-blue-200 bg-blue-50/40 rounded-xl p-3 space-y-2">
-                <div className="flex items-center justify-between whitespace-nowrap">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!showEditSubItemEntry && editSubItems.length === 0) {
-                        handleAddEditSubItem();
-                      }
-                      setShowEditSubItemEntry(!showEditSubItemEntry);
-                    }}
-                    className="flex items-center gap-2 text-xs font-black text-blue-800 hover:text-blue-900 cursor-pointer"
-                  >
-                    <div className="w-5 h-5 rounded-md bg-blue-600 text-white flex items-center justify-center font-bold">
-                      <Layers className="w-3.5 h-3.5" />
-                    </div>
-                    <span>쿠팡·마트 품목별 세부내역 관리 ({editSubItems.length}개)</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (!showEditSubItemEntry && editSubItems.length === 0) {
-                        handleAddEditSubItem();
-                      }
-                      setShowEditSubItemEntry(!showEditSubItemEntry);
-                    }}
-                    className="text-[11px] font-bold text-blue-600 hover:underline cursor-pointer"
-                  >
-                    {showEditSubItemEntry ? '접기 ▲' : '세부내역 펼치기 ▼'}
-                  </button>
-                </div>
-
-                {showEditSubItemEntry && (
-                  <div className="space-y-2 pt-1 border-t border-blue-100 animate-in fade-in duration-150">
-                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 font-medium whitespace-nowrap overflow-x-auto scrollbar-none">
-                      <span>품목별로 카테고리와 금액을 나누어 기록할 수 있습니다.</span>
-                      <div className="flex items-center gap-1 text-[11px] shrink-0">
-                        <span className="text-slate-400">예시:</span>
-                        <button
-                          type="button"
-                          onClick={() => applyEditPreset('coupang')}
-                          className="px-1.5 py-0.5 bg-white border border-slate-200 hover:border-blue-400 text-slate-700 rounded text-[10px] font-bold transition cursor-pointer"
-                        >
-                          쿠팡
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => applyEditPreset('mart')}
-                          className="px-1.5 py-0.5 bg-white border border-slate-200 hover:border-blue-400 text-slate-700 rounded text-[10px] font-bold transition cursor-pointer"
-                        >
-                          마트
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      {editSubItems.map((item, idx) => (
-                        <div
-                          key={item.id}
-                          className="p-2 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-1.5 sm:space-y-0 sm:flex sm:items-center sm:gap-2 transition hover:border-blue-300"
-                        >
-                          {/* Top on mobile, left on desktop */}
-                          <div className="flex items-center gap-1.5 flex-1 min-w-0">
-                            <span className="text-[10px] font-mono font-bold text-slate-400 w-4 text-center shrink-0">
-                              {idx + 1}
-                            </span>
-                            <input
-                              type="text"
-                              placeholder="품목명 (예: 우유, 세제)"
-                              value={item.name}
-                              onChange={(e) => handleUpdateEditSubItem(item.id, 'name', e.target.value)}
-                              className="flex-1 min-w-[85px] px-2 py-1 bg-slate-50 border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:border-blue-500"
-                            />
-                            <select
-                              value={item.category || editForm.category || '식비'}
-                              onChange={(e) => handleUpdateEditSubItem(item.id, 'category', e.target.value)}
-                              className="w-20 sm:w-24 px-1.5 py-1 bg-slate-50 border border-slate-300 rounded-lg text-xs font-bold text-slate-700 focus:bg-white focus:outline-none focus:border-blue-500 shrink-0"
-                            >
-                              {allCategories.map((c) => (
-                                <option key={c} value={c}>
-                                  {c}
-                                </option>
-                              ))}
-                            </select>
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveEditSubItem(item.id)}
-                              className="sm:hidden p-1 text-slate-400 hover:text-rose-600 rounded-md cursor-pointer shrink-0"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-
-                          {/* Bottom on mobile, right on desktop: 단가 × 수량 = 합계 */}
-                          <div className="flex items-center justify-between sm:justify-end gap-1.5 pl-5 sm:pl-0 pt-1 sm:pt-0 border-t border-slate-100 sm:border-0 shrink-0">
-                            {/* 단가 */}
-                            <div className="flex items-center gap-1">
-                              <span className="text-[10px] font-bold text-slate-500 shrink-0">단가:</span>
-                              <div className="w-18 sm:w-20 relative">
-                                <input
-                                  type="number"
-                                  min="0"
-                                  step="10"
-                                  placeholder="단가"
-                                  value={
-                                    item.unitPrice ||
-                                    (item.quantity && item.quantity > 0 && item.amount
-                                      ? Math.round(item.amount / item.quantity)
-                                      : item.amount || '')
-                                  }
-                                  onChange={(e) =>
-                                    handleUpdateEditSubItem(
-                                      item.id,
-                                      'unitPrice',
-                                      e.target.value ? Number(e.target.value) : 0
-                                    )
-                                  }
-                                  className="w-full pl-1.5 pr-4 py-1 bg-slate-50 border border-slate-300 rounded-lg text-xs font-bold text-slate-900 text-right focus:bg-white focus:outline-none focus:border-blue-500"
-                                />
-                                <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[9px] text-slate-400 select-none">
-                                  원
-                                </span>
-                              </div>
-                            </div>
-
-                            <span className="text-xs text-slate-400 font-bold select-none">×</span>
-
-                            {/* 수량 */}
-                            <div className="flex items-center gap-0.5">
-                              <span className="text-[10px] font-bold text-slate-500 shrink-0">수량:</span>
-                              <div className="flex items-center border border-slate-300 rounded-lg bg-white overflow-hidden shadow-2xs">
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleUpdateEditSubItem(
-                                      item.id,
-                                      'quantity',
-                                      Math.max(1, (item.quantity || 1) - 1)
-                                    )
-                                  }
-                                  className="w-5 h-6 flex items-center justify-center text-xs text-slate-600 hover:bg-slate-100 active:bg-slate-200 cursor-pointer font-black select-none"
-                                >
-                                  -
-                                </button>
-                                <input
-                                  type="number"
-                                  min="1"
-                                  max="999"
-                                  value={item.quantity || 1}
-                                  onChange={(e) =>
-                                    handleUpdateEditSubItem(
-                                      item.id,
-                                      'quantity',
-                                      e.target.value ? Number(e.target.value) : 1
-                                    )
-                                  }
-                                  className="w-7 text-center text-xs font-black text-blue-700 bg-white py-0.5 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    handleUpdateEditSubItem(
-                                      item.id,
-                                      'quantity',
-                                      (item.quantity || 1) + 1
-                                    )
-                                  }
-                                  className="w-5 h-6 flex items-center justify-center text-xs text-slate-600 hover:bg-slate-100 active:bg-slate-200 cursor-pointer font-black select-none"
-                                >
-                                  +
-                                </button>
-                              </div>
-                            </div>
-
-                            <span className="text-xs text-slate-400 font-bold select-none">=</span>
-
-                            {/* 합계 */}
-                            <div className="w-20 sm:w-24 relative">
-                              <input
-                                type="number"
-                                min="0"
-                                step="10"
-                                placeholder="합계"
-                                value={item.amount || ''}
-                                onChange={(e) =>
-                                  handleUpdateEditSubItem(
-                                    item.id,
-                                    'amount',
-                                    e.target.value ? Number(e.target.value) : 0
-                                  )
-                                }
-                                className="w-full pl-1.5 pr-4 py-1 bg-blue-50/50 border border-blue-300 rounded-lg text-xs font-black text-blue-900 text-right focus:bg-white focus:outline-none focus:border-blue-500"
-                              />
-                              <span className="absolute right-1 top-1/2 -translate-y-1/2 text-[9px] font-bold text-slate-400 select-none">
-                                원
-                              </span>
-                            </div>
-
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveEditSubItem(item.id)}
-                              className="hidden sm:flex p-1 text-slate-400 hover:text-rose-600 rounded-md cursor-pointer shrink-0"
-                              title="품목 삭제"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1 whitespace-nowrap">
-                      <button
-                        type="button"
-                        onClick={handleAddEditSubItem}
-                        className="px-2.5 py-1 bg-white border border-blue-300 text-blue-700 hover:bg-blue-50 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer shrink-0"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        <span>품목 추가</span>
-                      </button>
-
-                      {editSubItemsSum > 0 && (
-                        <div className="flex items-center gap-2 text-xs whitespace-nowrap shrink-0">
-                          <span className="text-slate-600 font-bold">
-                            품목 합계:{' '}
-                            <strong className="text-blue-700 font-black">
-                              {editSubItemsSum.toLocaleString('ko-KR')}원
-                            </strong>
-                          </span>
-                          <button
-                            type="button"
-                            onClick={handleSyncEditAmountWithSubItems}
-                            className="px-2 py-0.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-[11px] font-black cursor-pointer shadow-xs whitespace-nowrap shrink-0"
-                            title="상단 금액을 세부 품목 합계로 자동 설정"
-                          >
-                            총 금액에 적용
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* 8. Memo */}
-              <div>
-                <label className="block text-xs font-black text-slate-700 mb-1.5 flex items-center gap-1 whitespace-nowrap">
-                  <FileText className="w-3.5 h-3.5 text-slate-500" />
-                  <span>메모 (선택)</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="비고나 세부 메모를 입력하세요"
-                  value={editForm.memo || ''}
-                  onChange={(e) => setEditForm({ ...editForm, memo: e.target.value })}
-                  className="w-full px-4 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-xs font-medium text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-600 transition"
-                />
-              </div>
-            </div>
-
-            {/* Modal Actions - Centered for comfortable one-handed mobile use */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-center gap-2.5 sm:gap-3 shrink-0">
-              <button
-                type="button"
-                disabled={isSubmittingEdit}
-                onClick={() => setEditModalTx(null)}
-                className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 cursor-pointer transition active:scale-95"
-              >
-                닫기
-              </button>
-
-              {editModalTx && (
-                <>
-                  <button
-                    type="button"
-                    disabled={isSubmittingEdit}
-                    onClick={() => {
-                      const tx = editModalTx;
-                      setEditModalTx(null);
-                      setDeleteModalTx(tx);
-                    }}
-                    className="px-4 py-2.5 rounded-xl text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer flex items-center gap-1.5 transition active:scale-95"
-                    title="이 내역 삭제하기"
-                  >
-                    <Trash2 className="w-3.5 h-3.5 text-rose-500" />
-                    <span>삭제</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={isSubmittingEdit}
-                    onClick={() => {
-                      const tx = editModalTx;
-                      setEditModalTx(null);
-                      handleOpenCopyModal(tx);
-                    }}
-                    className="px-3.5 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 cursor-pointer flex items-center gap-1.5 transition active:scale-95"
-                    title="이 내역 복사하기"
-                  >
-                    <Copy className="w-3.5 h-3.5 text-slate-500" />
-                    <span>복사</span>
-                  </button>
-                </>
-              )}
-
-              {editSubItems.filter((s) => s.name.trim().length > 0 || (Number(s.amount) || 0) > 0).length > 0 && (
-                <button
-                  type="button"
-                  disabled={isSubmittingEdit}
-                  onClick={() => {
-                    if (editModalTx) {
-                      const parsedAmount =
-                        parseInt(editAmountStr.replace(/[^0-9]/g, '') || '0', 10) ||
-                        editModalTx.amount;
-                      handleSplitTransaction(
-                        {
-                          ...editModalTx,
-                          amount: parsedAmount,
-                          category: editForm.category || editModalTx.category,
-                          description: editForm.description?.trim() || editModalTx.description,
-                          paymentMethod: editForm.paymentMethod || editModalTx.paymentMethod,
-                        },
-                        editSubItems
-                      );
-                    }
-                  }}
-                  className="px-4 py-2.5 rounded-xl text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition cursor-pointer flex items-center gap-1.5 shadow-md shadow-emerald-600/25"
-                  title="각 세부 품목을 개별 내역으로 분할하고 남은 금액은 기존 항목 잔여로 유지"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>✂️ 개별 분할 저장</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                disabled={isSubmittingEdit}
-                onClick={handleSaveEdit}
-                className="px-6 py-2.5 rounded-xl text-xs font-black text-white bg-blue-600 hover:bg-blue-700 active:scale-95 transition cursor-pointer flex items-center gap-1.5 shadow-md shadow-blue-600/20"
-              >
-                {isSubmittingEdit ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Google 시트에 저장 중...</span>
-                  </>
-                ) : (
-                  <>
-                    <Check className="w-4 h-4" />
-                    <span>Google 시트에 수정 저장</span>
-                  </>
-                )}
-              </button>
-            </div>
+        <div
+          className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 backdrop-blur-xs p-4 pt-10 sm:pt-14 animate-in fade-in duration-150 overflow-y-auto"
+          onClick={() => setEditModalTx(null)}
+        >
+          <div
+            className="w-full max-w-xl bg-white rounded-2xl shadow-2xl border-2 border-slate-300 overflow-hidden my-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ExpenseInputForm
+              mode="edit"
+              editingTransaction={editModalTx}
+              analysis={analysis}
+              activeSheetTitle={activeSheetTitle}
+              spreadsheetTitle={spreadsheetTitle}
+              spreadsheetId={spreadsheetId || undefined}
+              isRealGoogleConnected={isRealGoogleConnected}
+              onUpdateTransaction={async (updatedTx) => {
+                await onEditTransaction(updatedTx);
+                setEditModalTx(null);
+              }}
+              onDeleteTransactionFromEdit={(tx) => {
+                setEditModalTx(null);
+                setDeleteModalTx(tx);
+              }}
+              onCopyTransactionFromEdit={(tx) => {
+                setEditModalTx(null);
+                handleOpenCopyModal(tx);
+              }}
+              onSplitTransactionFromEdit={handleSplitTransaction}
+              onClose={() => setEditModalTx(null)}
+              isModal={true}
+              customCategories={customCategories}
+              customPaymentMethods={resolvedCustomPaymentMethods}
+              onAddCustomCategory={onAddCustomCategory}
+              onAddCustomPaymentMethod={onAddCustomPaymentMethod}
+              onOpenCategoryManager={() => {
+                setEditModalTx(null);
+                onOpenCategoryManager?.();
+              }}
+              transactions={transactions}
+              sheetTabs={sheetTabs}
+              onFetchMonthTransactions={onFetchMonthTransactions}
+            />
           </div>
         </div>
       )}
@@ -4713,6 +3629,256 @@ export const Dashboard: React.FC<DashboardProps> = ({
         yearData={yearData}
         onSelectSheetTab={onSelectSheetTab}
       />
+
+      {/* 10. Card Installment Tracker Modal (카드 할부 내역 모아보기 / 관리) */}
+      {isInstallmentModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-150"
+          onClick={() => setIsInstallmentModalOpen(false)}
+        >
+          <div
+            className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl border-2 border-indigo-200 overflow-hidden flex flex-col max-h-[88vh] animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="px-5 py-4 bg-gradient-to-r from-indigo-900 via-indigo-800 to-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-500/30 border border-indigo-400/50 text-white flex items-center justify-center shrink-0">
+                  <CreditCard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="text-base font-black tracking-tight flex items-center gap-2">
+                    <span>카드 할부 내역 모아보기</span>
+                    <span className="px-2 py-0.5 rounded-full text-[11px] font-black bg-indigo-500/40 border border-indigo-300/40">
+                      총 {mergedInstallmentOverview.totalCount}건
+                    </span>
+                  </h4>
+                  <p className="text-xs text-indigo-200 font-medium">
+                    등록된 할부 원금, 이자율, 회차별 납부 현황 및 잔여 할부금을 한눈에 확인합니다.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsInstallmentModalOpen(false)}
+                className="p-1.5 text-indigo-200 hover:text-white hover:bg-white/10 rounded-lg transition cursor-pointer"
+                title="닫기"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Summary KPI Strip */}
+            <div className="grid grid-cols-3 gap-2 p-4 bg-indigo-50/70 border-b border-indigo-100 text-center">
+              <div className="bg-white rounded-xl p-2.5 border border-indigo-100 shadow-2xs">
+                <span className="text-[11px] font-bold text-slate-500 block">진행 중 할부</span>
+                <span className="text-sm sm:text-base font-black text-indigo-900">
+                  {mergedInstallmentOverview.activeCount}건
+                </span>
+              </div>
+              <div className="bg-white rounded-xl p-2.5 border border-indigo-100 shadow-2xs">
+                <span className="text-[11px] font-bold text-slate-500 block">월 평균 할부 부담</span>
+                <span className="text-sm sm:text-base font-black text-blue-700">
+                  {mergedInstallmentOverview.monthlyCommitment.toLocaleString('ko-KR')}원
+                </span>
+              </div>
+              <div className="bg-white rounded-xl p-2.5 border border-indigo-100 shadow-2xs">
+                <span className="text-[11px] font-bold text-slate-500 block">잔여 총 할부액</span>
+                <span className="text-sm sm:text-base font-black text-rose-600">
+                  {mergedInstallmentOverview.totalRemainingAmount.toLocaleString('ko-KR')}원
+                </span>
+              </div>
+            </div>
+
+            {/* Installment Cards List */}
+            <div className="p-4 overflow-y-auto space-y-3 flex-1 bg-slate-50/60">
+              {mergedInstallmentOverview.allCards.length === 0 ? (
+                <div className="py-12 text-center space-y-2">
+                  <div className="w-12 h-12 rounded-2xl bg-indigo-100 text-indigo-600 flex items-center justify-center mx-auto">
+                    <CreditCard className="w-6 h-6" />
+                  </div>
+                  <p className="text-sm font-black text-slate-700">등록된 카드 할부 내역이 없습니다.</p>
+                  <p className="text-xs text-slate-500">
+                    지출 입력창 하단의 <strong>카드 할부 자동 분할</strong>을 켜고 등록하면 매월 시트에 자동 입력되며 이곳에서 관리할 수 있습니다.
+                  </p>
+                </div>
+              ) : (
+                mergedInstallmentOverview.allCards.map((item) => {
+                  const progressPct = Math.min(100, Math.round((item.paidCount / Math.max(1, item.months)) * 100));
+                  const now = new Date();
+                  const todayYMD = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+                  return (
+                    <div
+                      key={item.id}
+                      className="bg-white rounded-2xl border border-slate-200 p-4 shadow-2xs space-y-3"
+                    >
+                      {/* Top Row */}
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 space-y-1">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-sm font-black text-slate-900 truncate">
+                              {item.description}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-black border ${
+                                item.annualInterestRate > 0
+                                  ? 'bg-amber-50 text-amber-800 border-amber-300'
+                                  : 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                              }`}
+                            >
+                              {item.months}개월 · {item.rateLabel}
+                            </span>
+                            {item.category && (
+                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] font-bold">
+                                {item.category}
+                              </span>
+                            )}
+                            {item.paymentMethod && (
+                              <span className="px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 text-[10px] font-bold">
+                                {item.paymentMethod}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-500 font-medium flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
+                            <span>시작일: {item.startDate || '-'}</span>
+                            <span>•</span>
+                            <span>원금: {item.totalPrincipal.toLocaleString('ko-KR')}원</span>
+                            {item.totalInterest > 0 && (
+                              <>
+                                <span>•</span>
+                                <span className="text-amber-700 font-bold">
+                                  총 이자: +{item.totalInterest.toLocaleString('ko-KR')}원
+                                </span>
+                              </>
+                            )}
+                            <span>•</span>
+                            <span className="font-bold text-slate-700">
+                              월 평균 {item.monthlyAvg.toLocaleString('ko-KR')}원
+                            </span>
+                          </div>
+                        </div>
+
+                        {item.isSavedPlan && (
+                          <div className="flex items-center gap-1 shrink-0">
+                            {confirmDeletePlanId === item.id ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const next = deleteInstallmentPlan(item.id, spreadsheetId);
+                                    setInstallmentPlans(next);
+                                    setConfirmDeletePlanId(null);
+                                  }}
+                                  className="px-2 py-1 text-[10.5px] font-black text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition cursor-pointer"
+                                  title="구글 시트의 월별 내역은 유지되고 할부 추적 목록에서만 삭제됩니다"
+                                >
+                                  목록에서 제거
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeletePlanId(null)}
+                                  className="px-2 py-1 text-[10.5px] font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition cursor-pointer"
+                                >
+                                  취소
+                                </button>
+                              </>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmDeletePlanId(item.id)}
+                                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                                title="할부 추적 목록에서 삭제"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Progress Bar */}
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between text-[11px] font-bold">
+                          <span className="text-indigo-700">
+                            진행률 {item.paidCount}/{item.months}회 ({progressPct}%)
+                          </span>
+                          <span className={item.remainingCount > 0 ? 'text-rose-600' : 'text-emerald-600'}>
+                            {item.remainingCount > 0
+                              ? `잔여 ${item.remainingCount}회 · ${item.remainingAmount.toLocaleString('ko-KR')}원`
+                              : '✓ 완납 완료'}
+                          </span>
+                        </div>
+                        <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${
+                              item.remainingCount === 0 ? 'bg-emerald-500' : 'bg-indigo-600'
+                            }`}
+                            style={{ width: `${progressPct}%` }}
+                          />
+                        </div>
+                      </div>
+
+                      {/* Schedule Chips */}
+                      {item.plan && item.plan.schedule.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 pt-1">
+                          {item.plan.schedule.map((sch) => {
+                            const isPastOrToday = sch.date <= todayYMD;
+                            return (
+                              <span
+                                key={sch.index}
+                                className={`px-2 py-1 rounded-lg text-[10.5px] font-bold border flex items-center gap-1 ${
+                                  isPastOrToday
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                    : sch.recordedInSheet
+                                    ? 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                                    : 'bg-slate-50 text-slate-500 border-slate-200'
+                                }`}
+                                title={`${sch.index}회차 (${sch.date}) · 원금 ${sch.principal.toLocaleString('ko-KR')}원${sch.interest > 0 ? ` + 이자 ${sch.interest.toLocaleString('ko-KR')}원` : ''} · ${sch.recordedInSheet ? '시트 반영됨' : '차년도 예정'}`}
+                              >
+                                <span>{isPastOrToday ? '✓' : '•'}</span>
+                                <span>{sch.index}회</span>
+                                <span className="font-mono">{sch.date.slice(2, 10)}</span>
+                                <span>{sch.amount.toLocaleString('ko-KR')}원</span>
+                                {!sch.recordedInSheet && (
+                                  <span className="text-[9px] px-1 rounded bg-slate-200 text-slate-600">
+                                    차년도
+                                  </span>
+                                )}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-5 py-3 bg-white border-t border-slate-200 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsInstallmentModalOpen(false);
+                  setSelectedRecurringFilter('installment');
+                }}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-black text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 transition cursor-pointer"
+              >
+                💳 할부 내역만 필터로 보기
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsInstallmentModalOpen(false)}
+                className="px-4 py-1.5 rounded-xl text-xs font-bold text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 transition cursor-pointer"
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
 
   );

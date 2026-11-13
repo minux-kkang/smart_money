@@ -8,8 +8,6 @@ import {
   Layers,
   X,
   Edit2,
-  Calendar,
-  CreditCard,
   RotateCcw,
   Plus,
   Check,
@@ -32,23 +30,28 @@ import {
 import {
   Transaction,
   TransactionType,
-  SubItem,
   CategoryItem,
   PaymentMethodItem,
+  SheetAnalysisResult,
   formatShortDate,
 } from '../types/ledger';
-import { saveSubItemsForTransaction } from '../services/subItemStorage';
 import { getPaymentGroupBadge } from '../utils/paymentGroupUtils';
 import { extractMonthNumberFromTab } from '../services/googleSheets';
+import { ExpenseInputForm } from './ExpenseInputForm';
 
 interface AnnualMatrixViewProps {
   yearData?: YearDashboardData;
   onSelectMonth?: (monthTitle: string) => void;
   transactions?: Transaction[];
   activeSheetTitle?: string;
+  analysis?: SheetAnalysisResult;
+  spreadsheetTitle?: string;
   onEditTransaction?: (tx: Transaction) => Promise<void> | void;
   customCategories?: CategoryItem[];
   customPaymentMethods?: PaymentMethodItem[];
+  onAddCustomCategory?: (name: string, type: TransactionType) => void;
+  onAddCustomPaymentMethod?: (name: string) => void;
+  onOpenCategoryManager?: () => void;
   spreadsheetId?: string;
   accessToken?: string | null;
   sheetTabs?: Array<{ id: number; title: string }>;
@@ -104,17 +107,6 @@ const SPECIAL_EXPENSE_CATEGORIES = new Set([
   '골프',
   '경조사',
 ]);
-
-const DEFAULT_PAYMENT_METHODS = [
-  '현대카드_신용',
-  '신한카드_체크',
-  'KB국민카드',
-  '삼성카드',
-  '계좌이체',
-  '자동이체',
-  '카카오페이',
-  '현금',
-];
 
 interface MatchedMatrixItem {
   tx: Transaction;
@@ -229,9 +221,14 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
   onSelectMonth,
   transactions,
   activeSheetTitle,
+  analysis,
+  spreadsheetTitle,
   onEditTransaction,
   customCategories,
   customPaymentMethods,
+  onAddCustomCategory,
+  onAddCustomPaymentMethod,
+  onOpenCategoryManager,
   spreadsheetId,
   accessToken,
   sheetTabs,
@@ -306,33 +303,8 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     amount: number;
   } | null>(null);
 
-  // In-place transaction edit modal state
+  // In-place transaction edit modal state (Unified with ExpenseInputForm)
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
-  const [editForm, setEditForm] = useState<{
-    date: string;
-    type: TransactionType;
-    category: string;
-    description: string;
-    amount: number;
-    paymentMethod?: string;
-    memo?: string;
-    isRecurring: boolean;
-    isSpecial: boolean;
-    subItems: SubItem[];
-  }>({
-    date: '',
-    type: 'expense',
-    category: '',
-    description: '',
-    amount: 0,
-    paymentMethod: '',
-    memo: '',
-    isRecurring: false,
-    isSpecial: false,
-    subItems: [],
-  });
-  const [editAmountStr, setEditAmountStr] = useState<string>('');
-  const [isSubmittingEdit, setIsSubmittingEdit] = useState<boolean>(false);
   const [editNoticeToast, setEditNoticeToast] = useState<string | null>(null);
 
   // Sync all 12 months from Google Sheets
@@ -752,38 +724,6 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     return [...top10, ...extraSelected];
   }, [allCategoriesForLegend, showAllCategoriesInLegend, legendCategorySearch, selectedCategoryFilters]);
 
-  // Available categories list (Strictly pure expense only)
-  const allCategoryNames = useMemo(() => {
-    const names = new Set<string>();
-    effectiveYearData.categories.forEach((c) => {
-      if (isPureExpenseCategory(c.category, customCategories)) {
-        names.add(c.category);
-      }
-    });
-    if (customCategories) {
-      customCategories.forEach((c) => {
-        if (c.type === 'expense' && isPureExpenseCategory(c.name, customCategories)) {
-          names.add(c.name);
-        }
-      });
-    }
-    return Array.from(names);
-  }, [effectiveYearData.categories, customCategories]);
-
-  // Available payment methods list
-  const allPaymentMethodNames = useMemo(() => {
-    const methods = new Set<string>(DEFAULT_PAYMENT_METHODS);
-    if (customPaymentMethods) {
-      customPaymentMethods.forEach((p) => methods.add(p.name));
-    }
-    effectiveTransactions.forEach((t) => {
-      if (t.paymentMethod && t.paymentMethod.trim()) {
-        methods.add(t.paymentMethod.trim());
-      }
-    });
-    return Array.from(methods);
-  }, [customPaymentMethods, effectiveTransactions]);
-
   // Monthly breakdown by spending types (고정예산, 일반일상, 특별지출)
   const monthlySpendingTypeData = useMemo(() => {
     return months.map((monthStr, mIdx) => {
@@ -1007,118 +947,55 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     }
   }, [selectedCellDetail, cellDetailItems]);
 
-  // Open In-Place Edit Modal
+  // Open In-Place Edit Modal (Unified with ExpenseInputForm)
   const handleOpenEdit = (tx: Transaction) => {
-    const isRec = Boolean(
-      tx.isRecurring ||
-      tx.memo?.includes('[정기예산]') ||
-      tx.memo?.includes('[고정지출]') ||
-      tx.memo?.includes('[정기지출]')
-    );
-    const isSpec = Boolean(
-      tx.isSpecial ||
-      tx.memo?.includes('[특별지출]') ||
-      tx.memo?.includes('[비정기지출]')
-    );
-
     setEditingTx(tx);
-    setEditForm({
-      date: tx.date || '',
-      type: tx.type || 'expense',
-      category: tx.category || '기타',
-      description: tx.description || '',
-      amount: tx.amount || 0,
-      paymentMethod: tx.paymentMethod || '현대카드_신용',
-      memo: tx.memo || '',
-      isRecurring: isRec,
-      isSpecial: isSpec,
-      subItems: tx.subItems ? tx.subItems.map((s) => ({ ...s })) : [],
-    });
-    setEditAmountStr(tx.amount > 0 ? tx.amount.toLocaleString('ko-KR') : '');
   };
 
-  // Save edited transaction
-  const handleSaveEdit = async () => {
-    if (!editingTx) return;
-
-    const rawNum = parseInt(editAmountStr.replace(/[^0-9]/g, ''), 10) || 0;
-    if (rawNum <= 0) {
-      alert('금액을 1원 이상 입력해주세요.');
-      return;
-    }
-    if (!editForm.description.trim()) {
-      alert('내용/사용처를 입력해주세요.');
-      return;
+  // Save edited transaction from unified ExpenseInputForm
+  const handleUpdateEditedTx = async (updatedTx: Transaction) => {
+    // Call parent edit handler if provided
+    if (onEditTransaction) {
+      await onEditTransaction(updatedTx);
     }
 
-    setIsSubmittingEdit(true);
-
-    try {
-      const updatedTx: Transaction = {
-        ...editingTx,
-        date: editForm.date,
-        type: editForm.type,
-        category: editForm.category,
-        description: editForm.description.trim(),
-        amount: rawNum,
-        paymentMethod: editForm.paymentMethod,
-        memo: editForm.memo?.trim() || undefined,
-        isRecurring: editForm.isRecurring,
-        isSpecial: editForm.isSpecial,
-        subItems: editForm.subItems.length > 0 ? editForm.subItems : undefined,
-      };
-
-      // Save sub-items persistence
-      saveSubItemsForTransaction(updatedTx, updatedTx.subItems || []);
-
-      // Call parent edit handler if provided
-      if (onEditTransaction) {
-        await onEditTransaction(updatedTx);
+    // Optimistically update local transactions override so this view updates immediately
+    setLocalTxOverrides((prev) => {
+      const next = [...prev];
+      const idx = next.findIndex((t) => t.id === updatedTx.id);
+      if (idx >= 0) {
+        next[idx] = updatedTx;
+      } else {
+        next.unshift(updatedTx);
       }
+      return next;
+    });
 
-      // Optimistically update local transactions override so this view updates immediately
-      setLocalTxOverrides((prev) => {
-        const next = [...prev];
-        const idx = next.findIndex((t) => t.id === updatedTx.id);
+    // Also update monthCache so the drill-down list updates immediately
+    const mNum = extractMonthNumber(updatedTx.date, updatedTx.sheetTitle);
+    if (mNum !== null) {
+      setMonthCache((prev) => {
+        const list = prev[mNum] || [];
+        const idx = list.findIndex((t) => t.id === updatedTx.id);
+        const nextList = [...list];
         if (idx >= 0) {
-          next[idx] = updatedTx;
+          nextList[idx] = updatedTx;
         } else {
-          next.unshift(updatedTx);
+          nextList.unshift(updatedTx);
         }
-        return next;
+        return {
+          ...prev,
+          [mNum]: nextList,
+        };
       });
-
-      // Also update monthCache so the drill-down list updates immediately
-      const mNum = extractMonthNumber(updatedTx.date, updatedTx.sheetTitle);
-      if (mNum !== null) {
-        setMonthCache((prev) => {
-          const list = prev[mNum] || [];
-          const idx = list.findIndex((t) => t.id === updatedTx.id);
-          const nextList = [...list];
-          if (idx >= 0) {
-            nextList[idx] = updatedTx;
-          } else {
-            nextList.unshift(updatedTx);
-          }
-          return {
-            ...prev,
-            [mNum]: nextList,
-          };
-        });
-      }
-
-      // Show toast
-      setEditNoticeToast(`'${updatedTx.description}' 내역이 성공적으로 수정되었습니다.`);
-      setTimeout(() => setEditNoticeToast(null), 3000);
-
-      // Close edit modal (keep drill-down list open so user sees the change)
-      setEditingTx(null);
-    } catch (err) {
-      console.error('Failed to save edited transaction:', err);
-      alert('내역 수정 저장 중 오류가 발생했습니다.');
-    } finally {
-      setIsSubmittingEdit(false);
     }
+
+    // Show toast
+    setEditNoticeToast(`'${updatedTx.description}' 내역이 성공적으로 수정되었습니다.`);
+    setTimeout(() => setEditNoticeToast(null), 3000);
+
+    // Close edit modal (keep drill-down list open so user sees the change)
+    setEditingTx(null);
   };
 
   return (
@@ -2086,279 +1963,40 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
         </div>
       )}
 
-      {/* In-Place Transaction Edit Modal */}
+      {/* In-Place Transaction Edit Modal (Unified with ExpenseInputForm) */}
       {editingTx && (
         <div
-          className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-150 overflow-y-auto"
+          className="fixed inset-0 z-60 flex items-start justify-center bg-black/60 backdrop-blur-xs p-4 pt-10 sm:pt-14 animate-in fade-in duration-150 overflow-y-auto"
           onClick={() => setEditingTx(null)}
         >
           <div
-            className="w-full max-w-xl bg-white rounded-2xl shadow-2xl border-2 border-slate-300 overflow-hidden my-auto flex flex-col max-h-[92vh]"
+            className="w-full max-w-xl bg-white rounded-2xl shadow-2xl border-2 border-slate-300 overflow-hidden my-auto"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Modal Header */}
-            <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shrink-0">
-                  <Edit2 className="w-4 h-4" />
-                </div>
-                <div className="min-w-0">
-                  <h2 className="text-base font-black tracking-tight whitespace-nowrap">가계부 내역 수정</h2>
-                  <p className="text-xs text-slate-300 mt-0.5">
-                    연간 매트릭스에서 선택한 항목을 실시간으로 수정합니다.
-                  </p>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                disabled={isSubmittingEdit}
-                onClick={() => setEditingTx(null)}
-                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer shrink-0"
-                title="닫기"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Modal Form Body */}
-            <div className="p-5 sm:p-6 space-y-4 bg-white overflow-y-auto flex-1">
-              {/* 1. Date Selection */}
-              <div>
-                <label className="block text-xs font-black text-slate-700 mb-1.5 flex items-center gap-1">
-                  <Calendar className="w-3.5 h-3.5 text-blue-600" />
-                  <span>거래 일자</span>
-                </label>
-                <input
-                  type="date"
-                  value={editForm.date}
-                  onChange={(e) => setEditForm((prev) => ({ ...prev, date: e.target.value }))}
-                  className="w-full px-3.5 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-xs sm:text-sm font-bold text-slate-900 focus:outline-none focus:border-blue-600"
-                  required
-                />
-              </div>
-
-              {/* 2. Amount Input */}
-              <div>
-                <label className="block text-xs font-black text-slate-700 mb-1.5">
-                  금액 <span className="text-red-500">*</span>
-                </label>
-                <div className="relative">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-xl font-black text-slate-500 select-none">
-                    ₩
-                  </span>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    placeholder="0"
-                    value={editAmountStr}
-                    onChange={(e) => {
-                      const digits = e.target.value.replace(/[^0-9]/g, '');
-                      const num = parseInt(digits, 10);
-                      setEditAmountStr(isNaN(num) || num === 0 ? '' : num.toLocaleString('ko-KR'));
-                      setEditForm((prev) => ({ ...prev, amount: isNaN(num) ? 0 : num }));
-                    }}
-                    className="w-full pl-10 pr-4 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-lg sm:text-xl font-black text-slate-900 placeholder:text-slate-300 focus:outline-none focus:border-blue-600 transition"
-                    required
-                  />
-                </div>
-
-                {/* Quick Add Buttons */}
-                <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                  {[10000, 30000, 50000, 100000].map((val) => (
-                    <button
-                      key={val}
-                      type="button"
-                      onClick={() => {
-                        const cur = parseInt(editAmountStr.replace(/[^0-9]/g, ''), 10) || 0;
-                        const next = cur + val;
-                        setEditAmountStr(next.toLocaleString('ko-KR'));
-                        setEditForm((prev) => ({ ...prev, amount: next }));
-                      }}
-                      className="px-2.5 py-1 text-xs font-extrabold bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg transition active:scale-95 cursor-pointer border border-slate-200"
-                    >
-                      +{val / 10000}만
-                    </button>
-                  ))}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEditAmountStr('');
-                      setEditForm((prev) => ({ ...prev, amount: 0 }));
-                    }}
-                    className="p-1 text-xs font-bold text-slate-500 hover:text-slate-800 rounded-lg cursor-pointer ml-1"
-                    title="금액 초기화"
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* 3. Description */}
-              <div>
-                <label className="block text-xs font-black text-slate-700 mb-1.5">
-                  사용처 / 내용 <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="예: 마트 장보기, 식사, 주유..."
-                  value={editForm.description}
-                  onChange={(e) => setEditForm((prev) => ({ ...prev, description: e.target.value }))}
-                  className="w-full px-4 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-sm font-bold text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-blue-600 transition"
-                  required
-                />
-              </div>
-
-              {/* 4. Category Selector */}
-              <div>
-                <label className="block text-xs font-black text-slate-700 mb-1.5 flex items-center gap-1">
-                  <Tag className="w-3.5 h-3.5 text-blue-600" />
-                  <span>지출 분류 (카테고리)</span>
-                </label>
-                <select
-                  value={editForm.category}
-                  onChange={(e) => setEditForm((prev) => ({ ...prev, category: e.target.value }))}
-                  className="w-full px-3.5 py-2.5 bg-white border-2 border-slate-300 rounded-xl text-xs sm:text-sm font-bold text-slate-900 focus:outline-none focus:border-blue-600 cursor-pointer"
-                >
-                  {allCategoryNames.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-
-                {/* Popular category chips for instant 1-click select */}
-                <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                  {['식비', '카페/간식', '생활용품', '교통비', '쇼핑', '의료/건강', '문화/여가'].map((quickCat) => (
-                    <button
-                      key={quickCat}
-                      type="button"
-                      onClick={() => setEditForm((prev) => ({ ...prev, category: quickCat }))}
-                      className={`px-2 py-0.5 rounded-lg text-xs font-bold border transition cursor-pointer ${
-                        editForm.category === quickCat
-                          ? 'bg-blue-600 text-white border-blue-700 shadow-2xs'
-                          : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
-                      }`}
-                    >
-                      {quickCat}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* 5. Payment Method */}
-              <div>
-                <label className="block text-xs font-black text-slate-700 mb-1.5 flex items-center gap-1">
-                  <CreditCard className="w-3.5 h-3.5 text-blue-600" />
-                  <span>결제 수단</span>
-                </label>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {allPaymentMethodNames.slice(0, 10).map((pm) => {
-                    const badge = getPaymentGroupBadge(pm);
-                    const isSelected = editForm.paymentMethod === pm;
-                    return (
-                      <button
-                        key={pm}
-                        type="button"
-                        onClick={() => setEditForm((prev) => ({ ...prev, paymentMethod: pm }))}
-                        className={`px-2.5 py-1 rounded-xl text-xs font-bold border transition cursor-pointer flex items-center gap-1.5 ${
-                          isSelected
-                            ? 'bg-indigo-600 text-white border-indigo-700 shadow-2xs'
-                            : 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
-                        }`}
-                        title={badge ? `${badge.group}` : undefined}
-                      >
-                        {badge && (
-                          <span
-                            className={`w-3.5 h-3.5 text-[9px] font-black rounded flex items-center justify-center shrink-0 ${
-                              isSelected
-                                ? 'bg-white/20 text-white border border-white/30'
-                                : `${badge.colorClass}`
-                            }`}
-                          >
-                            {badge.char}
-                          </span>
-                        )}
-                        <span>{pm}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* 6. Memo */}
-              <div>
-                <label className="block text-xs font-black text-slate-700 mb-1.5">메모 (선택사항)</label>
-                <input
-                  type="text"
-                  placeholder="추가 메모 입력"
-                  value={editForm.memo || ''}
-                  onChange={(e) => setEditForm((prev) => ({ ...prev, memo: e.target.value }))}
-                  className="w-full px-3.5 py-2 bg-white border border-slate-300 rounded-xl text-xs font-medium text-slate-900 focus:outline-none focus:border-blue-600"
-                />
-              </div>
-
-              {/* 7. Budget Type Flags */}
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <label className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={editForm.isRecurring}
-                    onChange={(e) =>
-                      setEditForm((prev) => ({
-                        ...prev,
-                        isRecurring: e.target.checked,
-                        isSpecial: e.target.checked ? false : prev.isSpecial,
-                      }))
-                    }
-                    className="w-4 h-4 text-purple-600 rounded border-slate-300 cursor-pointer"
-                  />
-                  <span>📌 고정 예산</span>
-                </label>
-                <label className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-2 text-xs font-bold text-slate-800 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={editForm.isSpecial}
-                    onChange={(e) =>
-                      setEditForm((prev) => ({
-                        ...prev,
-                        isSpecial: e.target.checked,
-                        isRecurring: e.target.checked ? false : prev.isRecurring,
-                      }))
-                    }
-                    className="w-4 h-4 text-amber-600 rounded border-slate-300 cursor-pointer"
-                  />
-                  <span>🛋️ 특별(비정기) 지출</span>
-                </label>
-              </div>
-            </div>
-
-            {/* Modal Actions */}
-            <div className="px-5 py-3.5 bg-slate-100 border-t border-slate-200 flex items-center justify-center gap-3 shrink-0">
-              <button
-                type="button"
-                disabled={isSubmittingEdit}
-                onClick={() => setEditingTx(null)}
-                className="px-5 py-2.5 bg-white hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 transition cursor-pointer active:scale-95"
-              >
-                취소
-              </button>
-              <button
-                type="button"
-                disabled={isSubmittingEdit}
-                onClick={handleSaveEdit}
-                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-black text-xs rounded-xl shadow-sm transition cursor-pointer flex items-center gap-1.5"
-              >
-                {isSubmittingEdit ? (
-                  <span>저장 중...</span>
-                ) : (
-                  <>
-                    <Check className="w-4 h-4 stroke-[2.5]" />
-                    <span>저장 완료</span>
-                  </>
-                )}
-              </button>
-            </div>
+            <ExpenseInputForm
+              mode="edit"
+              editingTransaction={editingTx}
+              analysis={analysis}
+              activeSheetTitle={editingTx.sheetTitle || activeSheetTitle || '1월'}
+              spreadsheetTitle={spreadsheetTitle}
+              spreadsheetId={spreadsheetId}
+              isRealGoogleConnected={Boolean(isRealGoogleConnected)}
+              onUpdateTransaction={handleUpdateEditedTx}
+              subtitleOverride="연간 매트릭스에서 선택한 항목을 실시간으로 수정합니다."
+              onClose={() => setEditingTx(null)}
+              isModal={true}
+              customCategories={customCategories}
+              customPaymentMethods={customPaymentMethods}
+              onAddCustomCategory={onAddCustomCategory}
+              onAddCustomPaymentMethod={onAddCustomPaymentMethod}
+              onOpenCategoryManager={() => {
+                setEditingTx(null);
+                onOpenCategoryManager?.();
+              }}
+              transactions={effectiveTransactions}
+              sheetTabs={sheetTabs}
+              onFetchMonthTransactions={onFetchMonthTransactions}
+            />
           </div>
         </div>
       )}

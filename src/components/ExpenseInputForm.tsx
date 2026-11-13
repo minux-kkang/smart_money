@@ -30,6 +30,7 @@ import {
   Copy,
   CheckCircle2,
   Clock,
+  Edit2,
 } from 'lucide-react';
 import {
   Transaction,
@@ -53,23 +54,38 @@ import {
 import { evaluateMathFormula, containsFormula, sanitizeFormulaInput } from '../utils/mathFormula';
 import { getPaymentGroupBadge } from '../utils/paymentGroupUtils';
 import { extractMonthNumberFromTab } from '../services/googleSheets';
+import {
+  buildInstallmentMemoTag,
+  calculateInstallmentSchedule,
+  parseInstallmentMeta,
+  saveInstallmentPlan,
+  InstallmentPlan,
+} from '../services/installmentStorage';
 
 interface ExpenseInputFormProps {
-  analysis: SheetAnalysisResult;
+  analysis?: SheetAnalysisResult;
   activeSheetTitle: string;
-  spreadsheetTitle: string;
+  spreadsheetTitle?: string;
   spreadsheetId?: string;
   isRealGoogleConnected: boolean;
-  onAddTransaction: (
+  onAddTransaction?: (
     transaction: Omit<Transaction, 'id' | 'rowIndex'> & { sheetTitle?: string }
   ) => Promise<void>;
   onBatchAddTransactions?: (
     transactions: Array<Omit<Transaction, 'id' | 'rowIndex'> & { sheetTitle?: string }>
   ) => Promise<void>;
+  mode?: 'create' | 'edit';
+  editingTransaction?: Transaction | null;
+  onUpdateTransaction?: (transaction: Transaction) => Promise<void>;
+  onDeleteTransactionFromEdit?: (transaction: Transaction) => void;
+  onCopyTransactionFromEdit?: (transaction: Transaction) => void;
+  onSplitTransactionFromEdit?: (transaction: Transaction, subItems: SubItem[]) => Promise<void> | void;
+  subtitleOverride?: string;
   onClose?: () => void;
   isModal?: boolean;
   customCategories?: CategoryItem[];
   customPaymentMethods?: PaymentMethodItem[];
+  onAddCustomCategory?: (name: string, type: TransactionType) => void;
   onAddCustomPaymentMethod?: (name: string) => void;
   onOpenCategoryManager?: () => void;
   transactions?: Transaction[];
@@ -79,18 +95,39 @@ interface ExpenseInputFormProps {
   initialDate?: string;
 }
 
+const stripMachineMemoTags = (rawMemo?: string): string => {
+  if (!rawMemo) return '';
+  return rawMemo
+    .replace(/\[세부품목:[\s\S]*?\]/g, '')
+    .replace(/\[할부:[^\]]*\]/g, '')
+    .replace(/\[정기예산\]/g, '')
+    .replace(/\[고정지출\]/g, '')
+    .replace(/\[정기지출\]/g, '')
+    .replace(/\[특별지출\]/g, '')
+    .replace(/\[비정기지출\]/g, '')
+    .trim();
+};
+
 export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   analysis,
   activeSheetTitle,
-  spreadsheetTitle,
+  spreadsheetTitle = '',
   spreadsheetId,
   isRealGoogleConnected,
   onAddTransaction,
   onBatchAddTransactions,
+  mode = 'create',
+  editingTransaction = null,
+  onUpdateTransaction,
+  onDeleteTransactionFromEdit,
+  onCopyTransactionFromEdit,
+  onSplitTransactionFromEdit,
+  subtitleOverride,
   onClose,
   isModal = false,
   customCategories,
   customPaymentMethods,
+  onAddCustomCategory,
   onAddCustomPaymentMethod,
   onOpenCategoryManager,
   transactions = [],
@@ -99,8 +136,15 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   initialOpenImport = false,
   initialDate,
 }) => {
-  const [type, setType] = useState<TransactionType>('expense');
-  const [amountStr, setAmountStr] = useState<string>('');
+  const isEditMode = mode === 'edit' && Boolean(editingTransaction);
+  const [type, setType] = useState<TransactionType>(() =>
+    editingTransaction ? editingTransaction.type || 'expense' : 'expense'
+  );
+  const [amountStr, setAmountStr] = useState<string>(() =>
+    editingTransaction && editingTransaction.amount > 0
+      ? editingTransaction.amount.toLocaleString('ko-KR')
+      : ''
+  );
   const [splitSubItemsIntoSeparateTx, setSplitSubItemsIntoSeparateTx] = useState<boolean>(false);
 
   const formatLocalYMD = (d: Date): string => {
@@ -202,21 +246,42 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   };
 
   const initialDefaultDateInfo = computeSmartDefaultDate();
-  const [date, setDate] = useState<string>(initialDefaultDateInfo.date);
-  const [isRememberedDate, setIsRememberedDate] = useState<boolean>(initialDefaultDateInfo.isRemembered);
+  const [date, setDate] = useState<string>(() =>
+    editingTransaction?.date ? editingTransaction.date : initialDefaultDateInfo.date
+  );
+  const [isRememberedDate, setIsRememberedDate] = useState<boolean>(() =>
+    editingTransaction ? false : initialDefaultDateInfo.isRemembered
+  );
 
-  // Sync date when activeSheetTitle, initialDate, or spreadsheetId changes
+  // Sync date when activeSheetTitle, initialDate, or spreadsheetId changes (create mode only)
   useEffect(() => {
+    if (isEditMode) return;
     const info = computeSmartDefaultDate();
     setDate(info.date);
     setIsRememberedDate(info.isRemembered);
-  }, [activeSheetTitle, initialDate, spreadsheetId]);
-  const [description, setDescription] = useState<string>('');
-  const [category, setCategory] = useState<string>('');
-  const [paymentMethod, setPaymentMethod] = useState<string>('');
-  const [memo, setMemo] = useState<string>('');
-  const [isRecurring, setIsRecurring] = useState<boolean>(false);
-  const [isSpecial, setIsSpecial] = useState<boolean>(false);
+  }, [activeSheetTitle, initialDate, spreadsheetId, isEditMode]);
+
+  const [description, setDescription] = useState<string>(() => editingTransaction?.description || '');
+  const [category, setCategory] = useState<string>(() => editingTransaction?.category || '');
+  const [paymentMethod, setPaymentMethod] = useState<string>(() => editingTransaction?.paymentMethod || '');
+  const [memo, setMemo] = useState<string>(() => stripMachineMemoTags(editingTransaction?.memo));
+  const [isRecurring, setIsRecurring] = useState<boolean>(() =>
+    Boolean(
+      editingTransaction &&
+        (editingTransaction.isRecurring ||
+          editingTransaction.memo?.includes('[정기예산]') ||
+          editingTransaction.memo?.includes('[고정지출]') ||
+          editingTransaction.memo?.includes('[정기지출]'))
+    )
+  );
+  const [isSpecial, setIsSpecial] = useState<boolean>(() =>
+    Boolean(
+      editingTransaction &&
+        (editingTransaction.isSpecial ||
+          editingTransaction.memo?.includes('[특별지출]') ||
+          editingTransaction.memo?.includes('[비정기지출]'))
+    )
+  );
   const [customCategoryInput, setCustomCategoryInput] = useState<boolean>(false);
   const [newCategoryText, setNewCategoryText] = useState<string>('');
   const [categorySearchQuery, setCategorySearchQuery] = useState<string>('');
@@ -230,6 +295,19 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [successAnimation, setSuccessAnimation] = useState<boolean>(false);
+
+  // Card Installment (카드 할부 자동 분할) State - non-intrusive, collapsed by default
+  const [showInstallmentPanel, setShowInstallmentPanel] = useState<boolean>(false);
+  const [isInstallmentEnabled, setIsInstallmentEnabled] = useState<boolean>(false);
+  const [installmentMonths, setInstallmentMonths] = useState<number>(3);
+  const [installmentRateStr, setInstallmentRateStr] = useState<string>('0');
+
+  useEffect(() => {
+    if (type !== 'expense') {
+      setIsInstallmentEnabled(false);
+      setShowInstallmentPanel(false);
+    }
+  }, [type]);
 
   // Import (지난달 고정지출 & 내역 복사) State
   const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(Boolean(initialOpenImport));
@@ -421,7 +499,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
 
       if (onBatchAddTransactions) {
         await onBatchAddTransactions(newItems);
-      } else {
+      } else if (onAddTransaction) {
         for (const item of newItems) {
           await onAddTransaction(item);
         }
@@ -488,8 +566,47 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   }, [importedTransactions, selectedImportIds]);
 
   // Sub-items for composite purchases (Coupang, Mart, etc.)
-  const [showSubItemEntry, setShowSubItemEntry] = useState<boolean>(false);
-  const [subItems, setSubItems] = useState<SubItem[]>([]);
+  const [showSubItemEntry, setShowSubItemEntry] = useState<boolean>(() =>
+    Boolean(editingTransaction?.subItems && editingTransaction.subItems.length > 0)
+  );
+  const [subItems, setSubItems] = useState<SubItem[]>(() =>
+    editingTransaction?.subItems ? editingTransaction.subItems.map((s) => ({ ...s })) : []
+  );
+
+  // Sync all fields when editingTransaction changes in edit mode
+  useEffect(() => {
+    if (!isEditMode || !editingTransaction) return;
+    const isRec = Boolean(
+      editingTransaction.isRecurring ||
+        editingTransaction.memo?.includes('[정기예산]') ||
+        editingTransaction.memo?.includes('[고정지출]') ||
+        editingTransaction.memo?.includes('[정기지출]')
+    );
+    const isSpec = Boolean(
+      editingTransaction.isSpecial ||
+        editingTransaction.memo?.includes('[특별지출]') ||
+        editingTransaction.memo?.includes('[비정기지출]')
+    );
+    setType(editingTransaction.type || 'expense');
+    setAmountStr(editingTransaction.amount > 0 ? editingTransaction.amount.toLocaleString('ko-KR') : '');
+    setDate(editingTransaction.date || '');
+    setIsRememberedDate(false);
+    setDescription(editingTransaction.description || '');
+    setCategory(editingTransaction.category || '');
+    setPaymentMethod(editingTransaction.paymentMethod || '');
+    setMemo(stripMachineMemoTags(editingTransaction.memo));
+    setIsRecurring(isRec);
+    setIsSpecial(isSpec);
+    setSubItems(editingTransaction.subItems ? editingTransaction.subItems.map((s) => ({ ...s })) : []);
+    setShowSubItemEntry(Boolean(editingTransaction.subItems && editingTransaction.subItems.length > 0));
+    setCategorySearchQuery('');
+    setPaymentSearchQuery('');
+    setCustomCategoryInput(false);
+    setNewCategoryText('');
+    setCustomPaymentInput(false);
+    setNewPaymentText('');
+    setCategoryHighlighted(false);
+  }, [isEditMode, editingTransaction]);
 
   const amountInputRef = useRef<HTMLInputElement>(null);
   const descInputRef = useRef<HTMLInputElement>(null);
@@ -619,7 +736,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
         return c.type === 'expense' || !c.type;
       });
     } else {
-      list = analysis.detectedCategories
+      list = (analysis?.detectedCategories || [])
         .filter((c) => {
           if (type === 'income') return c.type === 'income';
           if (type === 'transfer') return c.type === 'transfer';
@@ -649,6 +766,19 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
       }));
     }
 
+    // In edit mode, ensure the currently assigned category is always visible in the pills list
+    if (isEditMode && category && !list.some((c) => c.name === category)) {
+      list = [
+        ...list,
+        {
+          id: `edit_curr_${category}`,
+          name: category,
+          type,
+          isVisible: true,
+        },
+      ];
+    }
+
     const rawVisible = list.filter((c) => c.isVisible).map((c) => c.name);
     const rawHidden = list.filter((c) => !c.isVisible).map((c) => c.name);
 
@@ -663,19 +793,83 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
       visibleCategories: sortedVisible,
       hiddenCategories: sortedHidden,
     };
-  }, [customCategories, analysis.detectedCategories, type, categoryFrequencyMap]);
+  }, [customCategories, analysis?.detectedCategories, type, categoryFrequencyMap, isEditMode, category]);
 
-  // Filtered categories for inline search box (includes hidden categories when searching)
+  // Comprehensive searchable categories across visible, hidden, sheet-detected, history, defaults, and other types
+  const allSearchableCategories = React.useMemo(() => {
+    const result: Array<{ name: string; isHidden: boolean; otherType?: TransactionType }> = [];
+    const seenCurrent = new Set<string>();
+
+    const addCurrent = (rawName: string, isHidden: boolean) => {
+      const name = rawName.trim();
+      if (!name) return;
+      const key = name.toLowerCase();
+      if (seenCurrent.has(key)) return;
+      seenCurrent.add(key);
+      result.push({ name, isHidden });
+    };
+
+    visibleCategories.forEach((name) => addCurrent(name, false));
+    hiddenCategories.forEach((name) => addCurrent(name, true));
+
+    // Detected from sheet for current type
+    (analysis?.detectedCategories || []).forEach((c) => {
+      const cType: TransactionType = c.type || 'expense';
+      if (cType === type) {
+        addCurrent(c.name, false);
+      }
+    });
+
+    // Seen in transactions for current type
+    (transactions || []).forEach((t) => {
+      if ((t.type || 'expense') === type && t.category) {
+        addCurrent(t.category, false);
+      }
+    });
+
+    // Standard defaults for current type
+    const defaults =
+      type === 'income'
+        ? DEFAULT_INCOME_CATEGORIES
+        : type === 'transfer'
+        ? DEFAULT_TRANSFER_CATEGORIES
+        : DEFAULT_EXPENSE_CATEGORIES;
+    defaults.forEach((name) => addCurrent(name, false));
+
+    // Categories belonging to other types (searchable globally when typing)
+    const seenOther = new Set<string>();
+    const addOther = (rawName: string, catType: TransactionType, isHidden: boolean) => {
+      const name = rawName.trim();
+      if (!name) return;
+      const lower = name.toLowerCase();
+      if (seenCurrent.has(lower) || seenOther.has(`${catType}:${lower}`)) return;
+      seenOther.add(`${catType}:${lower}`);
+      result.push({ name, isHidden, otherType: catType });
+    };
+
+    (customCategories || []).forEach((c) => {
+      const cType: TransactionType = c.type || 'expense';
+      if (cType !== type) addOther(c.name, cType, !c.isVisible);
+    });
+    (analysis?.detectedCategories || []).forEach((c) => {
+      const cType: TransactionType = c.type || 'expense';
+      if (cType !== type) addOther(c.name, cType, false);
+    });
+
+    return result;
+  }, [visibleCategories, hiddenCategories, analysis?.detectedCategories, transactions, customCategories, type]);
+
+  // Filtered categories for inline search box (searches ALL categories without requiring '전체보기/숨김보기')
   const filteredCategoryOptions = React.useMemo(() => {
     const q = categorySearchQuery.trim().toLowerCase();
     if (!q) {
-      return visibleCategories.map((name) => ({ name, isHidden: false }));
+      return visibleCategories.map((name) => ({
+        name,
+        isHidden: false,
+        otherType: undefined as TransactionType | undefined,
+      }));
     }
-    const combined = [
-      ...visibleCategories.map((name) => ({ name, isHidden: false })),
-      ...hiddenCategories.map((name) => ({ name, isHidden: true })),
-    ];
-    return combined
+    return allSearchableCategories
       .filter((item) => item.name.toLowerCase().includes(q))
       .sort((a, b) => {
         const aLower = a.name.toLowerCase();
@@ -686,16 +880,19 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
         const aStarts = aLower.startsWith(q) ? 0 : 1;
         const bStarts = bLower.startsWith(q) ? 0 : 1;
         if (aStarts !== bStarts) return aStarts - bStarts;
+        const aOther = a.otherType ? 1 : 0;
+        const bOther = b.otherType ? 1 : 0;
+        if (aOther !== bOther) return aOther - bOther;
         if (a.isHidden !== b.isHidden) return a.isHidden ? 1 : -1;
         return 0;
       });
-  }, [categorySearchQuery, visibleCategories, hiddenCategories]);
+  }, [categorySearchQuery, visibleCategories, allSearchableCategories]);
 
   const hasExactCategoryMatch = React.useMemo(() => {
     const q = categorySearchQuery.trim().toLowerCase();
     if (!q) return true;
-    return [...visibleCategories, ...hiddenCategories].some((c) => c.toLowerCase() === q);
-  }, [categorySearchQuery, visibleCategories, hiddenCategories]);
+    return allSearchableCategories.some((c) => !c.otherType && c.name.toLowerCase() === q);
+  }, [categorySearchQuery, allSearchableCategories]);
 
   useEffect(() => {
     setCategoryActiveIndex(0);
@@ -713,7 +910,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
         return c.type === 'expense' || !c.type;
       });
     } else {
-      list = analysis.detectedCategories
+      list = (analysis?.detectedCategories || [])
         .filter((c) => {
           if (newType === 'income') return c.type === 'income';
           if (newType === 'transfer') return c.type === 'transfer';
@@ -786,7 +983,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
       }
 
       // 3. Detected from sheet analysis
-      if (analysis.detectedPaymentMethods && analysis.detectedPaymentMethods.length > 0) {
+      if (analysis?.detectedPaymentMethods && analysis.detectedPaymentMethods.length > 0) {
         analysis.detectedPaymentMethods.forEach((p) => {
           if (p && p.trim()) set.add(p.trim());
         });
@@ -831,7 +1028,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     }, [
       customPaymentMethods,
       transactions,
-      analysis.detectedPaymentMethods,
+      analysis?.detectedPaymentMethods,
       paymentMethod,
       paymentFrequencyMap,
       showAllPaymentMethods,
@@ -868,10 +1065,27 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     setPaymentActiveIndex(0);
   }, [paymentSearchQuery]);
 
-  const handleSelectOrAddCategoryFromSearch = (chosenName: string) => {
+  // Hidden payment method lookup for search badge
+  const hiddenPaymentSet = React.useMemo(() => {
+    const set = new Set<string>();
+    (customPaymentMethods || []).forEach((p) => {
+      if (!p.isVisible && p.name) set.add(p.name.trim());
+    });
+    return set;
+  }, [customPaymentMethods]);
+
+  const handleSelectOrAddCategoryFromSearch = (chosenName: string, isNew: boolean = false) => {
     const trimmed = chosenName.trim();
     if (!trimmed) return;
     setCategory(trimmed);
+    const alreadyInCustom = Boolean(
+      customCategories?.some(
+        (c) => c.name.trim().toLowerCase() === trimmed.toLowerCase() && (c.type || 'expense') === type
+      )
+    );
+    if ((isNew || !alreadyInCustom) && onAddCustomCategory) {
+      onAddCustomCategory(trimmed, type);
+    }
     setCategoryHighlighted(false);
     setCategorySearchQuery('');
     setCustomCategoryInput(false);
@@ -881,7 +1095,10 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     const trimmed = chosenName.trim();
     if (!trimmed) return;
     setPaymentMethod(trimmed);
-    if (isNew && onAddCustomPaymentMethod) {
+    const alreadyInCustom = Boolean(
+      customPaymentMethods?.some((p) => p.name.trim().toLowerCase() === trimmed.toLowerCase())
+    );
+    if ((isNew || !alreadyInCustom) && onAddCustomPaymentMethod) {
       onAddCustomPaymentMethod(trimmed);
     }
     setPaymentSearchQuery('');
@@ -919,29 +1136,30 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     }
   }, [category]);
 
-  // Keep category unselected by default so user is guided to explicitly pick the category without omission
+  // Keep category unselected by default in create mode when switching types
   useEffect(() => {
-    if (category && !visibleCategories.includes(category)) {
+    if (isEditMode) return;
+    if (category && !visibleCategories.includes(category) && !hiddenCategories.includes(category)) {
       setCategory('');
     }
-  }, [type, visibleCategories]);
+  }, [type, visibleCategories, hiddenCategories, isEditMode]);
 
-
-  // Set default payment method
+  // Set default payment method (create mode only)
   useEffect(() => {
+    if (isEditMode) return;
     if (!paymentMethod && displayPaymentMethods.length > 0) {
       setPaymentMethod(displayPaymentMethods[0]);
     }
-  }, [displayPaymentMethods]);
+  }, [displayPaymentMethods, isEditMode]);
 
   // Smart Autocomplete Suggestions based on Description typing
   const filteredSuggestions = React.useMemo(() => {
     if (!description.trim()) return [];
     const q = description.trim().toLowerCase();
-    return analysis.historicalDescriptions
+    return (analysis?.historicalDescriptions || [])
       .filter((h) => h.description.toLowerCase().includes(q))
       .slice(0, 5);
-  }, [description, analysis.historicalDescriptions]);
+  }, [description, analysis?.historicalDescriptions]);
 
   // Handle smart autofill from historical pick
   const handleSelectSuggestion = (item: {
@@ -965,14 +1183,16 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     setDescription(val);
     setShowSuggestions(true);
 
-    // Auto-predict category
-    const exactMatch = analysis.historicalDescriptions.find(
-      (h) => h.description.toLowerCase() === val.trim().toLowerCase()
-    );
-    if (exactMatch) {
-      setCategory(exactMatch.category);
-      if (exactMatch.paymentMethod) {
-        setPaymentMethod(exactMatch.paymentMethod);
+    // Auto-predict category (do not overwrite existing category in edit mode)
+    if (!isEditMode || !category) {
+      const exactMatch = (analysis?.historicalDescriptions || []).find(
+        (h) => h.description.toLowerCase() === val.trim().toLowerCase()
+      );
+      if (exactMatch) {
+        setCategory(exactMatch.category);
+        if (exactMatch.paymentMethod && (!isEditMode || !paymentMethod)) {
+          setPaymentMethod(exactMatch.paymentMethod);
+        }
       }
     }
   };
@@ -991,6 +1211,59 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
       setAmountStr(formulaEval.value.toLocaleString('ko-KR'));
     }
   };
+
+  // Installment live schedule preview (create mode + expense only)
+  const parsedBaseAmount = React.useMemo(() => {
+    if (isFormula) {
+      return formulaEval.isValid && formulaEval.value !== null ? formulaEval.value : 0;
+    }
+    return parseInt(amountStr.replace(/[^0-9]/g, '') || '0', 10);
+  }, [isFormula, formulaEval, amountStr]);
+
+  const inferredSheetYear = React.useMemo(() => {
+    const yMatch = spreadsheetTitle?.match(/20\d{2}/) || activeSheetTitle?.match(/20\d{2}/);
+    if (yMatch) return parseInt(yMatch[0], 10);
+    const dMatch = date?.match(/^(20\d{2})-/);
+    return dMatch ? parseInt(dMatch[1], 10) : new Date().getFullYear();
+  }, [spreadsheetTitle, activeSheetTitle, date]);
+
+  const annualInterestRateNum = React.useMemo(() => {
+    const cleaned = installmentRateStr.replace(/[^0-9.]/g, '');
+    const n = parseFloat(cleaned);
+    return isNaN(n) || n < 0 ? 0 : Math.min(99, n);
+  }, [installmentRateStr]);
+
+  const installmentPreview = React.useMemo(() => {
+    if (isEditMode || type !== 'expense' || !isInstallmentEnabled) return null;
+    return calculateInstallmentSchedule({
+      totalPrincipal: parsedBaseAmount,
+      months: installmentMonths,
+      annualInterestRate: annualInterestRateNum,
+      startDate: date || formatLocalYMD(new Date()),
+      sheetYear: inferredSheetYear,
+    });
+  }, [
+    isEditMode,
+    type,
+    isInstallmentEnabled,
+    parsedBaseAmount,
+    installmentMonths,
+    annualInterestRateNum,
+    date,
+    inferredSheetYear,
+  ]);
+
+  const installmentInSheetItems = React.useMemo(() => {
+    if (!installmentPreview) return [];
+    const sameYear = installmentPreview.schedule.filter((s) => s.recordedInSheet);
+    return sameYear.length > 0 ? sameYear : installmentPreview.schedule;
+  }, [installmentPreview]);
+
+  const installmentFutureYearItems = React.useMemo(() => {
+    if (!installmentPreview) return [];
+    const sameYear = installmentPreview.schedule.filter((s) => s.recordedInSheet);
+    return sameYear.length > 0 ? installmentPreview.schedule.filter((s) => !s.recordedInSheet) : [];
+  }, [installmentPreview]);
 
   const handleInsertChar = (ch: string) => {
     if (ch === '=') {
@@ -1103,8 +1376,12 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
 
   // Handle Add Category
   const handleAddNewCategory = () => {
-    if (newCategoryText.trim()) {
-      setCategory(newCategoryText.trim());
+    const trimmed = newCategoryText.trim();
+    if (trimmed) {
+      setCategory(trimmed);
+      if (onAddCustomCategory) {
+        onAddCustomCategory(trimmed, type);
+      }
       setNewCategoryText('');
       setCustomCategoryInput(false);
     }
@@ -1144,7 +1421,9 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
 
 
     setIsSubmitting(true);
-    saveLastEnteredDate(date);
+    if (!isEditMode) {
+      saveLastEnteredDate(date);
+    }
     try {
       const validSubItems = subItems
         .filter((s) => s.name.trim().length > 0 || (Number(s.amount) || 0) > 0)
@@ -1158,8 +1437,157 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
             quantity: qty,
             unitPrice: up,
             amount: amt,
+            category: s.category || category || '식비',
           };
         });
+
+      if (isEditMode && editingTransaction && onUpdateTransaction) {
+        const cleanBaseMemo = stripMachineMemoTags(memo);
+        let finalMemo =
+          validSubItems.length > 0
+            ? serializeSubItemsToMemo(cleanBaseMemo || undefined, validSubItems)
+            : cleanBaseMemo;
+
+        const existingInstallmentTagMatch = editingTransaction.memo?.match(/\[할부:[^\]]*\]/);
+        if (existingInstallmentTagMatch) {
+          finalMemo = finalMemo
+            ? `${existingInstallmentTagMatch[0]} ${finalMemo}`
+            : existingInstallmentTagMatch[0];
+        }
+
+        if (isRecurring) {
+          finalMemo = finalMemo ? `[정기예산] ${finalMemo}` : '[정기예산]';
+        } else if (isSpecial) {
+          finalMemo = finalMemo ? `[특별지출] ${finalMemo}` : '[특별지출]';
+        }
+
+        const updatedTx: Transaction = {
+          ...editingTransaction,
+          date: date || editingTransaction.date,
+          type,
+          category: category || editingTransaction.category || '기타',
+          description: description.trim(),
+          amount: numAmount,
+          paymentMethod: paymentMethod || '',
+          isRecurring: isRecurring || undefined,
+          isSpecial: isSpecial || undefined,
+          memo: finalMemo || undefined,
+          subItems: validSubItems.length > 0 ? validSubItems : undefined,
+        };
+
+        saveSubItemsForTransaction(updatedTx, validSubItems);
+        await onUpdateTransaction(updatedTx);
+        if (isModal && onClose) {
+          onClose();
+        }
+        return;
+      }
+
+      if (!onAddTransaction && !(isInstallmentEnabled && onBatchAddTransactions)) {
+        throw new Error('거래 추가 핸들러가 연결되지 않았습니다.');
+      }
+
+      // Card Installment Auto-Split Registration (create mode + expense)
+      if (type === 'expense' && isInstallmentEnabled && installmentPreview) {
+        const monthsClamped = Math.min(60, Math.max(2, Math.round(installmentMonths)));
+        const cleanBaseMemo = stripMachineMemoTags(memo);
+        const sameYearExists = installmentPreview.schedule.some((s) => s.recordedInSheet);
+        const normalizedSchedule = sameYearExists
+          ? installmentPreview.schedule
+          : installmentPreview.schedule.map((s) => ({ ...s, recordedInSheet: true }));
+
+        const itemsToWrite = normalizedSchedule.filter((s) => s.recordedInSheet);
+
+        const plan: InstallmentPlan = {
+          id: `inst_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+          description: description.trim(),
+          category: category || '기타',
+          paymentMethod: paymentMethod || '',
+          startDate: date,
+          totalPrincipal: numAmount,
+          months: monthsClamped,
+          annualInterestRate: annualInterestRateNum,
+          totalInterest: installmentPreview.totalInterest,
+          totalPayable: installmentPreview.totalPayable,
+          memo: cleanBaseMemo || undefined,
+          isRecurring: isRecurring || undefined,
+          isSpecial: isSpecial || undefined,
+          createdAt: Date.now(),
+          schedule: normalizedSchedule,
+        };
+        saveInstallmentPlan(plan, spreadsheetId || analysis?.spreadsheetId);
+
+        const nowTs = Date.now();
+        const batchTxs: Array<Omit<Transaction, 'id' | 'rowIndex'> & { sheetTitle?: string }> =
+          itemsToWrite.map((item) => {
+            const instTag = buildInstallmentMemoTag({
+              index: item.index,
+              months: monthsClamped,
+              annualInterestRate: annualInterestRateNum,
+              totalPrincipal: numAmount,
+              startDate: date,
+            });
+            const interestNote =
+              item.interest > 0
+                ? `(이자 ${item.interest.toLocaleString('ko-KR')}원 포함)`
+                : '';
+
+            const parts: string[] = [];
+            if (isRecurring) parts.push('[정기예산]');
+            else if (isSpecial) parts.push('[특별지출]');
+            parts.push(instTag);
+            if (interestNote) parts.push(interestNote);
+            if (cleanBaseMemo) parts.push(cleanBaseMemo);
+
+            return {
+              date: item.date,
+              type: 'expense' as TransactionType,
+              category: category || '기타',
+              description: `${description.trim()} (할부 ${item.index}/${monthsClamped})`,
+              amount: item.amount,
+              paymentMethod: paymentMethod || undefined,
+              isRecurring: isRecurring || undefined,
+              isSpecial: isSpecial || undefined,
+              memo: parts.join(' ').trim(),
+              sheetTitle: item.sheetTitle,
+              createdAt: nowTs + item.index,
+            };
+          });
+
+        if (onBatchAddTransactions) {
+          await onBatchAddTransactions(batchTxs);
+        } else if (onAddTransaction) {
+          for (const tx of batchTxs) {
+            await onAddTransaction(tx);
+          }
+        }
+
+        setSuccessAnimation(true);
+        setTimeout(() => setSuccessAnimation(false), 2000);
+
+        setAmountStr('');
+        setDescription('');
+        setMemo('');
+        setCategorySearchQuery('');
+        setPaymentSearchQuery('');
+        setIsRecurring(false);
+        setIsSpecial(false);
+        setSubItems([]);
+        setShowSubItemEntry(false);
+        setIsInstallmentEnabled(false);
+        setShowInstallmentPanel(false);
+        setInstallmentMonths(3);
+        setInstallmentRateStr('0');
+
+        if (isModal && onClose) {
+          onClose();
+        }
+        return;
+      }
+
+      if (!onAddTransaction) {
+        throw new Error('거래 추가 핸들러가 연결되지 않았습니다.');
+      }
 
       if (validSubItems.length > 0 && splitSubItemsIntoSeparateTx) {
         const subSum = validSubItems.reduce((acc, s) => acc + s.amount, 0);
@@ -1220,10 +1648,11 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
           });
         }
       } else {
+        const cleanBaseMemo = stripMachineMemoTags(memo);
         let finalMemo =
           validSubItems.length > 0
-            ? serializeSubItemsToMemo(memo.trim() || undefined, validSubItems)
-            : memo.trim() || undefined;
+            ? serializeSubItemsToMemo(cleanBaseMemo || undefined, validSubItems)
+            : cleanBaseMemo || undefined;
 
         if (isRecurring) {
           finalMemo = finalMemo
@@ -1288,28 +1717,77 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     }
   };
 
+  const validSubItemsForSplit = React.useMemo(
+    () =>
+      subItems
+        .filter((s) => s.name.trim().length > 0 || (Number(s.amount) || 0) > 0)
+        .map((s) => {
+          const qty = Math.max(1, Number(s.quantity) || 1);
+          const amt = Math.max(0, Number(s.amount) || 0);
+          const up = s.unitPrice && s.unitPrice > 0 ? s.unitPrice : qty > 0 ? Math.round(amt / qty) : amt;
+          return {
+            ...s,
+            name: s.name.trim() || '품목',
+            quantity: qty,
+            unitPrice: up,
+            amount: amt,
+            category: s.category || category || '식비',
+          };
+        }),
+    [subItems, category]
+  );
+
   return (
     <div className="bg-white rounded-2xl border-2 border-slate-300 shadow-xl overflow-hidden text-slate-900">
       {/* Top Banner / Form Header */}
       <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold">
-            <Plus className="w-5 h-5" />
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shrink-0">
+            {isEditMode ? <Edit2 className="w-5 h-5" /> : <Plus className="w-5 h-5" />}
           </div>
-          <div>
-            <h2 className="text-base font-black tracking-tight">가계부 입력창</h2>
-            <div className="flex items-center gap-2 mt-0.5">
-              <span className="text-xs text-slate-300 font-medium">{spreadsheetTitle}</span>
-              <span className="text-xs text-slate-400">•</span>
-              <span className="text-xs font-bold text-slate-300">{targetMonth}</span>
-            </div>
+          <div className="min-w-0">
+            <h2 className="text-base font-black tracking-tight whitespace-nowrap">
+              {isEditMode ? '가계부 내역 수정' : '가계부 입력창'}
+            </h2>
+            {isEditMode ? (
+              <div className="flex items-center gap-2 mt-0.5 text-xs text-slate-300 whitespace-nowrap overflow-x-auto scrollbar-none">
+                {subtitleOverride ? (
+                  <span>{subtitleOverride}</span>
+                ) : (
+                  <>
+                    <span className="text-slate-400">
+                      [{editingTransaction?.sheetTitle || activeSheetTitle}] 시트
+                    </span>
+                    {editingTransaction?.rowIndex && (
+                      <>
+                        <span className="text-slate-500">•</span>
+                        <span>{editingTransaction.rowIndex}행</span>
+                      </>
+                    )}
+                    {isRealGoogleConnected && (
+                      <>
+                        <span className="text-slate-500">•</span>
+                        <span className="text-emerald-400 font-bold">Google 시트 실시간 반영</span>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="text-xs text-slate-300 font-medium">{spreadsheetTitle}</span>
+                <span className="text-xs text-slate-400">•</span>
+                <span className="text-xs font-bold text-slate-300">{targetMonth}</span>
+              </div>
+            )}
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {onClose && (
             <button
               type="button"
+              disabled={isSubmitting}
               onClick={onClose}
               className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer"
               title="닫기"
@@ -1320,49 +1798,75 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
         </div>
       </div>
 
-      {/* Quick Action: 불러오기 & 복사 (지난달 고정지출 우선) */}
-      <div className="px-5 py-3 bg-gradient-to-r from-blue-50 via-indigo-50 to-slate-50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2.5">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-            <Sparkles className="w-4 h-4" />
+      {/* Mode-specific Top Sub-banner */}
+      {isEditMode ? (
+        <div className="px-5 py-2.5 bg-blue-50 border-b border-blue-200 flex items-center justify-between gap-2 text-xs text-blue-950 font-bold whitespace-nowrap overflow-x-auto scrollbar-none">
+          <div className="flex items-center gap-2 shrink-0">
+            <Info className="w-4 h-4 text-blue-600 shrink-0" />
+            <span>
+              거래 일자:{' '}
+              <strong className="text-blue-900 underline">{formatShortDate(date || '')}</strong>{' '}
+              <span className="text-blue-600 text-[11px] font-normal">({date})</span>
+            </span>
+            {(() => {
+              const instMeta = editingTransaction ? parseInstallmentMeta(editingTransaction) : null;
+              if (!instMeta) return null;
+              return (
+                <span className="px-2 py-0.5 bg-indigo-100 text-indigo-800 border border-indigo-300 rounded-md text-[11px] font-black shrink-0">
+                  💳 할부 {instMeta.current}/{instMeta.total}
+                  {instMeta.isInterestFree ? ' 무이자' : instMeta.rateLabel ? ` (${instMeta.rateLabel})` : ''}
+                </span>
+              );
+            })()}
           </div>
-          <div>
-            <p className="text-xs font-black text-slate-800">
-              지난달 고정지출 불러오기 / 내역 복사
-            </p>
-            <p className="text-[11px] text-slate-500 font-medium">
-              관리비·통신비·보험료 등 정기 지출을 1초 만에 채우거나 일괄 등록하세요
-            </p>
-          </div>
+          <span className="px-2 py-0.5 bg-blue-600 text-white rounded-md text-[11px] font-extrabold shrink-0">
+            {editingTransaction?.sheetTitle || activeSheetTitle} 시트에 수정 반영
+          </span>
         </div>
+      ) : (
+        <div className="px-5 py-3 bg-gradient-to-r from-blue-50 via-indigo-50 to-slate-50 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2">
+            <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div>
+              <p className="text-xs font-black text-slate-800">
+                지난달 고정지출 불러오기 / 내역 복사
+              </p>
+              <p className="text-[11px] text-slate-500 font-medium">
+                관리비·통신비·보험료 등 정기 지출을 1초 만에 채우거나 일괄 등록하세요
+              </p>
+            </div>
+          </div>
 
-        <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => {
-              setImportTab('fixed');
-              setIsImportModalOpen(true);
-            }}
-            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm shadow-indigo-600/20 active:scale-95 transition cursor-pointer"
-            title="지난달 고정지출(관리비, 통신비, 보험, 구독 등)을 바로 불러옵니다."
-          >
-            <Repeat className="w-3.5 h-3.5" />
-            <span>⚡ 지난달 고정지출 불러오기</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setImportTab('all');
-              setIsImportModalOpen(true);
-            }}
-            className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 active:scale-95 transition cursor-pointer"
-            title="과거 내역을 검색하여 복사합니다."
-          >
-            <Copy className="w-3.5 h-3.5 text-slate-500" />
-            <span>최근 내역 복사</span>
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setImportTab('fixed');
+                setIsImportModalOpen(true);
+              }}
+              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm shadow-indigo-600/20 active:scale-95 transition cursor-pointer"
+              title="지난달 고정지출(관리비, 통신비, 보험, 구독 등)을 바로 불러옵니다."
+            >
+              <Repeat className="w-3.5 h-3.5" />
+              <span>⚡ 지난달 고정지출 불러오기</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setImportTab('all');
+                setIsImportModalOpen(true);
+              }}
+              className="px-2.5 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 active:scale-95 transition cursor-pointer"
+              title="과거 내역을 검색하여 복사합니다."
+            >
+              <Copy className="w-3.5 h-3.5 text-slate-500" />
+              <span>최근 내역 복사</span>
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {importNotice && (
         <div className="px-5 py-2.5 bg-emerald-50 text-emerald-800 border-b border-emerald-200 text-xs font-bold flex items-center gap-2 animate-in fade-in duration-200">
@@ -1582,7 +2086,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
               <span>사용처 / 내용</span>
               <span className="text-red-500">*</span>
             </label>
-            {analysis.historicalDescriptions.length > 0 && (
+            {(analysis?.historicalDescriptions?.length ?? 0) > 0 && (
               <span className="text-[11px] text-blue-600 flex items-center gap-1 font-bold">
                 <Sparkles className="w-3 h-3" />
                 자동완성 추천
@@ -1868,14 +2372,14 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                       }
                       if (filteredCategoryOptions.length > 0) {
                         const safeIdx = Math.min(categoryActiveIndex, filteredCategoryOptions.length - 1);
-                        handleSelectOrAddCategoryFromSearch(filteredCategoryOptions[safeIdx].name);
+                        handleSelectOrAddCategoryFromSearch(filteredCategoryOptions[safeIdx].name, false);
                       } else {
-                        handleSelectOrAddCategoryFromSearch(q);
+                        handleSelectOrAddCategoryFromSearch(q, true);
                       }
                     }
                   }}
-                  placeholder="분류 검색·태그 (Enter)"
-                  className="w-36 sm:w-44 pl-6 pr-6 py-1 bg-white border border-slate-300 rounded-lg text-[11px] font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 transition"
+                  placeholder="전체 분류 검색·추가 (Enter)"
+                  className="w-40 sm:w-48 pl-6 pr-6 py-1 bg-white border border-slate-300 rounded-lg text-[11px] font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 transition"
                 />
                 {categorySearchQuery && (
                   <button
@@ -1979,9 +2483,9 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                     idx === Math.min(categoryActiveIndex, filteredCategoryOptions.length - 1);
                   return (
                     <button
-                      key={`${cat}-${item.isHidden ? 'h' : 'v'}`}
+                      key={`${cat}-${item.otherType || type}-${item.isHidden ? 'h' : 'v'}`}
                       type="button"
-                      onClick={() => handleSelectOrAddCategoryFromSearch(cat)}
+                      onClick={() => handleSelectOrAddCategoryFromSearch(cat, false)}
                       className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center gap-1 whitespace-nowrap ${
                         category === cat
                           ? type === 'expense'
@@ -1996,6 +2500,15 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                       title={label}
                     >
                       <span>{cat}</span>
+                      {item.otherType && (
+                        <span
+                          className={`text-[9px] font-bold px-1 rounded-sm ${
+                            category === cat ? 'bg-white/20 text-white' : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {item.otherType === 'income' ? '수입' : item.otherType === 'transfer' ? '이체' : '지출'}
+                        </span>
+                      )}
                       {item.isHidden && (
                         <span
                           className={`text-[9px] font-bold px-1 rounded-sm ${
@@ -2021,11 +2534,11 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                 {categorySearchQuery.trim() && !hasExactCategoryMatch && (
                   <button
                     type="button"
-                    onClick={() => handleSelectOrAddCategoryFromSearch(categorySearchQuery)}
+                    onClick={() => handleSelectOrAddCategoryFromSearch(categorySearchQuery, true)}
                     className="px-3 py-1.5 rounded-xl text-xs font-black bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition cursor-pointer flex items-center gap-1 whitespace-nowrap"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>"{categorySearchQuery.trim()}" 분류로 바로 태그</span>
+                    <span>"{categorySearchQuery.trim()}" 새 분류 추가·태그</span>
                   </button>
                 )}
 
@@ -2148,8 +2661,8 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                       }
                     }
                   }}
-                  placeholder="결제수단 검색·태그 (Enter)"
-                  className="w-36 sm:w-44 pl-6 pr-6 py-1 bg-white border border-slate-300 rounded-lg text-[11px] font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 transition"
+                  placeholder="전체 결제수단 검색·추가 (Enter)"
+                  className="w-40 sm:w-48 pl-6 pr-6 py-1 bg-white border border-slate-300 rounded-lg text-[11px] font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 transition"
                 />
                 {paymentSearchQuery && (
                   <button
@@ -2276,6 +2789,15 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                         </span>
                       )}
                       <span>{pm}</span>
+                      {hiddenPaymentSet.has(pm) && (
+                        <span
+                          className={`text-[9px] font-bold px-1 rounded-sm ${
+                            isSelected ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-600'
+                          }`}
+                        >
+                          숨김
+                        </span>
+                      )}
                       {displayCount > 0 && (
                         <span
                           className={`text-[9px] font-bold px-1 rounded-sm ${
@@ -2396,7 +2918,14 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                         onChange={(e) => handleUpdateSubItem(item.id, 'category', e.target.value)}
                         className="w-20 sm:w-24 px-1.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs font-bold text-slate-700 focus:bg-white focus:outline-none focus:border-blue-500 shrink-0"
                       >
-                        {visibleCategories.map((c) => (
+                        {Array.from(
+                          new Set([
+                            ...visibleCategories,
+                            ...hiddenCategories,
+                            ...(item.category ? [item.category] : []),
+                            ...(category ? [category] : []),
+                          ])
+                        ).map((c) => (
                           <option key={c} value={c}>
                             {c}
                           </option>
@@ -2556,8 +3085,8 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                 )}
               </div>
 
-              {/* Auto split option checkbox */}
-              {subItems.length > 0 && (
+              {/* Auto split option checkbox (create mode only; edit mode provides split action button below) */}
+              {!isEditMode && subItems.length > 0 && (
                 <div className="mt-2.5 p-2.5 bg-blue-50/90 border border-blue-200 rounded-xl space-y-1">
                   <label className="flex items-center gap-2 cursor-pointer text-xs font-black text-blue-950 select-none">
                     <input
@@ -2578,6 +3107,244 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
             </div>
           )}
         </div>
+
+        {/* 6.5. Optional Collapsible Card Installment Section (Non-intrusive, expense create mode only) */}
+        {!isEditMode && type === 'expense' && (
+          <div
+            className={`rounded-xl border transition-all ${
+              isInstallmentEnabled
+                ? 'border-indigo-400 bg-indigo-50/40 shadow-xs'
+                : showInstallmentPanel
+                ? 'border-indigo-200 bg-slate-50/70'
+                : 'border-slate-200 bg-slate-50/40'
+            }`}
+          >
+            <button
+              type="button"
+              tabIndex={-1}
+              onClick={() => {
+                setShowInstallmentPanel((prev) => {
+                  const next = !prev;
+                  if (next && !isInstallmentEnabled) {
+                    setIsInstallmentEnabled(true);
+                  }
+                  return next;
+                });
+              }}
+              className="w-full px-3.5 py-2.5 flex items-center justify-between text-xs font-bold text-slate-700 hover:bg-slate-100/70 rounded-xl transition cursor-pointer"
+            >
+              <span className="flex items-center gap-1.5">
+                <CreditCard className="w-3.5 h-3.5 text-indigo-600" />
+                <span>카드 할부 자동 분할 (선택)</span>
+                {isInstallmentEnabled ? (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-black bg-indigo-600 text-white">
+                    {installmentMonths}개월 {annualInterestRateNum > 0 ? `연 ${annualInterestRateNum}%` : '무이자'}
+                  </span>
+                ) : (
+                  <span className="text-[11px] text-slate-400 font-medium hidden sm:inline">
+                    — 할부 기간 동안 매월 자동 입력 · 이자율 지원
+                  </span>
+                )}
+              </span>
+              <span className="text-[11px] font-bold text-indigo-600 flex items-center gap-0.5 shrink-0">
+                <span>{showInstallmentPanel ? '접기' : isInstallmentEnabled ? '설정 보기' : '할부 설정'}</span>
+                {showInstallmentPanel ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              </span>
+            </button>
+
+            {showInstallmentPanel && (
+              <div className="px-3.5 pb-3.5 pt-2 border-t border-indigo-100 space-y-3 animate-in fade-in duration-150">
+                {/* Enable Checkbox */}
+                <label className="flex items-center justify-between gap-2 p-2.5 bg-white border border-indigo-200 rounded-xl cursor-pointer select-none">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={isInstallmentEnabled}
+                      onChange={(e) => setIsInstallmentEnabled(e.target.checked)}
+                      className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer"
+                    />
+                    <div>
+                      <span className="text-xs font-black text-indigo-950 block">
+                        이 결제를 카드 할부로 매월 자동 분할 등록
+                      </span>
+                      <span className="text-[10.5px] text-slate-500 block">
+                        결제일({date || '오늘'}) 기준으로 매월 같은 날짜에 할부 회차가 자동 생성됩니다.
+                      </span>
+                    </div>
+                  </div>
+                </label>
+
+                {isInstallmentEnabled && (
+                  <>
+                    {/* Installment Months */}
+                    <div className="bg-white border border-slate-200 rounded-xl p-2.5 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-black text-slate-700">할부 개월 수</span>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="number"
+                            min={2}
+                            max={60}
+                            value={installmentMonths}
+                            onChange={(e) => {
+                              const v = parseInt(e.target.value, 10);
+                              if (!isNaN(v)) setInstallmentMonths(Math.min(60, Math.max(2, v)));
+                            }}
+                            className="w-14 px-2 py-1 text-right text-xs font-black text-indigo-900 bg-indigo-50 border border-indigo-300 rounded-lg focus:outline-none focus:border-indigo-600"
+                          />
+                          <span className="text-[11px] font-bold text-slate-600">개월</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {[2, 3, 6, 10, 12, 24].map((m) => (
+                          <button
+                            key={m}
+                            type="button"
+                            onClick={() => setInstallmentMonths(m)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition cursor-pointer ${
+                              installmentMonths === m
+                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:border-indigo-300'
+                            }`}
+                          >
+                            {m}개월
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Interest Rate */}
+                    <div className="bg-white border border-slate-200 rounded-xl p-2.5 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <span className="text-[11px] font-black text-slate-700">연 할부 이자율</span>
+                          <span className="text-[10px] text-slate-400 ml-1.5">(유이자 시 원리금균등 계산)</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={installmentRateStr}
+                            onChange={(e) => {
+                              const val = e.target.value.replace(/[^0-9.]/g, '');
+                              const parts = val.split('.');
+                              const normalized = parts.length > 2 ? `${parts[0]}.${parts.slice(1).join('')}` : val;
+                              setInstallmentRateStr(normalized);
+                            }}
+                            onBlur={() => {
+                              if (!installmentRateStr.trim()) setInstallmentRateStr('0');
+                            }}
+                            className="w-16 px-2 py-1 text-right text-xs font-black text-indigo-900 bg-indigo-50 border border-indigo-300 rounded-lg focus:outline-none focus:border-indigo-600"
+                          />
+                          <span className="text-[11px] font-bold text-slate-600">%</span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {[
+                          { label: '무이자 (0%)', val: '0' },
+                          { label: '3.5%', val: '3.5' },
+                          { label: '5.9%', val: '5.9' },
+                          { label: '10%', val: '10' },
+                          { label: '14.5%', val: '14.5' },
+                        ].map((preset) => (
+                          <button
+                            key={preset.val}
+                            type="button"
+                            onClick={() => setInstallmentRateStr(preset.val)}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition cursor-pointer ${
+                              Number(installmentRateStr || '0') === Number(preset.val)
+                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-indigo-50 hover:border-indigo-300'
+                            }`}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Live Preview Box */}
+                    {installmentPreview && (
+                      <div className="bg-gradient-to-br from-indigo-50 to-blue-50 border border-indigo-200 rounded-xl p-3 space-y-2">
+                        {parsedBaseAmount <= 0 ? (
+                          <p className="text-[11px] font-bold text-indigo-700">
+                            💡 상단에 총 할부 원금을 입력하면 월 납부액과 회차별 날짜가 바로 계산됩니다.
+                          </p>
+                        ) : (
+                          <>
+                            <div className="grid grid-cols-3 gap-2 text-center">
+                              <div className="bg-white/90 rounded-lg p-2 border border-indigo-100">
+                                <span className="text-[10px] font-bold text-slate-500 block">월 평균 납부액</span>
+                                <span className="text-xs sm:text-sm font-black text-indigo-700">
+                                  {installmentPreview.monthlyAverage.toLocaleString('ko-KR')}원
+                                </span>
+                              </div>
+                              <div className="bg-white/90 rounded-lg p-2 border border-indigo-100">
+                                <span className="text-[10px] font-bold text-slate-500 block">총 할부 이자</span>
+                                <span className={`text-xs sm:text-sm font-black ${installmentPreview.totalInterest > 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+                                  {installmentPreview.totalInterest > 0
+                                    ? `+${installmentPreview.totalInterest.toLocaleString('ko-KR')}원`
+                                    : '무이자 0원'}
+                                </span>
+                              </div>
+                              <div className="bg-white/90 rounded-lg p-2 border border-indigo-100">
+                                <span className="text-[10px] font-bold text-slate-500 block">총 납부 합계</span>
+                                <span className="text-xs sm:text-sm font-black text-slate-900">
+                                  {installmentPreview.totalPayable.toLocaleString('ko-KR')}원
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="text-[11px] text-indigo-900 space-y-1">
+                              <div className="flex flex-wrap items-center justify-between gap-1">
+                                <span className="font-bold">
+                                  📅 할부 기간:{' '}
+                                  <strong className="font-black">
+                                    {installmentPreview.schedule[0]?.date} ~{' '}
+                                    {installmentPreview.schedule[installmentPreview.schedule.length - 1]?.date}
+                                  </strong>
+                                </span>
+                                <span className="text-[10.5px] font-bold text-indigo-700">
+                                  {inferredSheetYear}년 시트 {installmentInSheetItems.length}건 자동 입력
+                                </span>
+                              </div>
+
+                              <div className="flex flex-wrap gap-1 pt-0.5">
+                                {installmentPreview.schedule.slice(0, 6).map((s) => (
+                                  <span
+                                    key={s.index}
+                                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold border ${
+                                      s.recordedInSheet || installmentFutureYearItems.length === 0
+                                        ? 'bg-white text-indigo-800 border-indigo-200'
+                                        : 'bg-slate-100 text-slate-500 border-slate-200'
+                                    }`}
+                                  >
+                                    {s.index}회 {s.date.slice(2, 7)} · {s.amount.toLocaleString('ko-KR')}원
+                                  </span>
+                                ))}
+                                {installmentPreview.schedule.length > 6 && (
+                                  <span className="px-1.5 py-0.5 rounded text-[10px] font-bold text-indigo-600">
+                                    외 {installmentPreview.schedule.length - 6}회...
+                                  </span>
+                                )}
+                              </div>
+
+                              {installmentFutureYearItems.length > 0 && (
+                                <p className="text-[10.5px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 font-bold">
+                                  ℹ️ 내년({installmentFutureYearItems[0].year}년) 이후 {installmentFutureYearItems.length}회차는 올해({inferredSheetYear}) 시트 합계 왜곡을 막기 위해 시트에는 쓰지 않고, 대시보드 <strong>💳 할부 현황</strong>에서 잔여 회차로 계속 추적됩니다.
+                                </p>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* 7. Memo */}
         <div>
@@ -2605,42 +3372,143 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
           />
         </div>
 
-        {/* Submit Button */}
-        <button
-          ref={submitButtonRef}
-          type="submit"
-          disabled={isSubmitting}
-          onKeyDown={(e) => {
-            if (e.key === 'Tab' && e.shiftKey) {
-              e.preventDefault();
-              focusAndScroll(memoInputRef.current, submitButtonRef.current, 'end');
-            }
-          }}
-          className={`w-full py-4 rounded-xl font-black text-base text-white shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer focus:outline-none focus:ring-4 focus:ring-blue-300 ${
-            successAnimation
-              ? 'bg-emerald-600 shadow-emerald-500/30'
-              : type === 'expense'
-              ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/30 active:scale-98'
-              : 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/30 active:scale-98'
-          }`}
-        >
-          {successAnimation ? (
-            <>
-              <Check className="w-5 h-5 animate-bounce" />
-              <span>저장 완료되었습니다!</span>
-            </>
-          ) : isSubmitting ? (
-            <div className="flex items-center gap-2">
-              <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
-              <span>가계부에 저장 중...</span>
-            </div>
-          ) : (
-            <>
-              <Plus className="w-5 h-5" />
-              <span>가계부에 저장하기</span>
-            </>
-          )}
-        </button>
+        {/* Submit / Action Bar */}
+        {isEditMode ? (
+          <div className="pt-2 border-t border-slate-200 flex flex-wrap items-center justify-center gap-2.5 sm:gap-3">
+            {onClose && (
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={onClose}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-100 cursor-pointer transition active:scale-95"
+              >
+                닫기
+              </button>
+            )}
+
+            {editingTransaction && onDeleteTransactionFromEdit && (
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => onDeleteTransactionFromEdit(editingTransaction)}
+                className="px-4 py-2.5 rounded-xl text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 cursor-pointer flex items-center gap-1.5 transition active:scale-95"
+                title="이 내역 삭제하기"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-500" />
+                <span>삭제</span>
+              </button>
+            )}
+
+            {editingTransaction && onCopyTransactionFromEdit && (
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => onCopyTransactionFromEdit(editingTransaction)}
+                className="px-3.5 py-2.5 rounded-xl text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 cursor-pointer flex items-center gap-1.5 transition active:scale-95"
+                title="이 내역 복사하기"
+              >
+                <Copy className="w-3.5 h-3.5 text-slate-500" />
+                <span>복사</span>
+              </button>
+            )}
+
+            {editingTransaction && onSplitTransactionFromEdit && validSubItemsForSplit.length > 0 && (
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => {
+                  const parsedAmount =
+                    isFormula && formulaEval.isValid && formulaEval.value !== null
+                      ? formulaEval.value
+                      : parseInt(amountStr.replace(/[^0-9]/g, '') || '0', 10) || editingTransaction.amount;
+                  onSplitTransactionFromEdit(
+                    {
+                      ...editingTransaction,
+                      amount: parsedAmount,
+                      category: category || editingTransaction.category,
+                      description: description.trim() || editingTransaction.description,
+                      paymentMethod: paymentMethod || editingTransaction.paymentMethod,
+                    },
+                    validSubItemsForSplit
+                  );
+                }}
+                className="px-4 py-2.5 rounded-xl text-xs font-black text-white bg-emerald-600 hover:bg-emerald-700 active:scale-95 transition cursor-pointer flex items-center gap-1.5 shadow-md shadow-emerald-600/25"
+                title="각 세부 품목을 개별 내역으로 분할하고 남은 금액은 기존 항목 잔여로 유지"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                <span>✂️ 개별 분할 저장</span>
+              </button>
+            )}
+
+            <button
+              ref={submitButtonRef}
+              type="submit"
+              disabled={isSubmitting}
+              onKeyDown={(e) => {
+                if (e.key === 'Tab' && e.shiftKey) {
+                  e.preventDefault();
+                  focusAndScroll(memoInputRef.current, submitButtonRef.current, 'end');
+                }
+              }}
+              className="px-6 py-2.5 rounded-xl text-xs font-black text-white bg-blue-600 hover:bg-blue-700 active:scale-95 transition cursor-pointer flex items-center gap-1.5 shadow-md shadow-blue-600/20 focus:outline-none focus:ring-4 focus:ring-blue-300"
+            >
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>{isRealGoogleConnected ? 'Google 시트에 저장 중...' : '수정 저장 중...'}</span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  <span>{isRealGoogleConnected ? 'Google 시트에 수정 저장' : '수정 내용 저장'}</span>
+                </>
+              )}
+            </button>
+          </div>
+        ) : (
+          <button
+            ref={submitButtonRef}
+            type="submit"
+            disabled={isSubmitting}
+            onKeyDown={(e) => {
+              if (e.key === 'Tab' && e.shiftKey) {
+                e.preventDefault();
+                focusAndScroll(memoInputRef.current, submitButtonRef.current, 'end');
+              }
+            }}
+            className={`w-full py-4 rounded-xl font-black text-base text-white shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer focus:outline-none focus:ring-4 focus:ring-blue-300 ${
+              successAnimation
+                ? 'bg-emerald-600 shadow-emerald-500/30'
+                : type === 'expense'
+                ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-600/30 active:scale-98'
+                : 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/30 active:scale-98'
+            }`}
+          >
+            {successAnimation ? (
+              <>
+                <Check className="w-5 h-5 animate-bounce" />
+                <span>저장 완료되었습니다!</span>
+              </>
+            ) : isSubmitting ? (
+              <div className="flex items-center gap-2">
+                <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                <span>가계부에 저장 중...</span>
+              </div>
+            ) : isInstallmentEnabled && installmentPreview ? (
+              <>
+                <CreditCard className="w-5 h-5" />
+                <span>
+                  💳 {installmentMonths}개월 할부 등록 (시트 {installmentInSheetItems.length}건 자동 입력)
+                </span>
+              </>
+            ) : (
+              <>
+                <Plus className="w-5 h-5" />
+                <span>가계부에 저장하기</span>
+              </>
+            )}
+          </button>
+        )}
       </form>
 
       {/* 4. Import / Copy Modal (지난달 고정지출 & 최근 내역 복사) */}

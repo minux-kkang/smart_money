@@ -52,6 +52,7 @@ import {
 } from './data/userLedgerData';
 import {
   Transaction,
+  TransactionType,
   SheetAnalysisResult,
   ColumnMapping,
   CategoryItem,
@@ -118,11 +119,42 @@ export default function App() {
     return loadPaymentMethods(defaultMethods);
   });
 
+  const handleAddCustomCategory = useCallback(
+    (name: string, catType: TransactionType = 'expense') => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      setCustomCategories((prev) => {
+        if (
+          prev.some(
+            (c) =>
+              c.name.trim().toLowerCase() === trimmed.toLowerCase() &&
+              (c.type || 'expense') === catType
+          )
+        ) {
+          return prev;
+        }
+        const next: CategoryItem[] = [
+          ...prev,
+          {
+            id: `cat_custom_${Date.now()}`,
+            name: trimmed,
+            type: catType,
+            isVisible: true,
+            isCustom: true,
+          },
+        ];
+        saveCategories(next);
+        return next;
+      });
+    },
+    []
+  );
+
   const handleAddCustomPaymentMethod = useCallback((name: string) => {
     const trimmed = name.trim();
     if (!trimmed) return;
     setCustomPaymentMethods((prev) => {
-      if (prev.some((p) => p.name === trimmed)) return prev;
+      if (prev.some((p) => p.name.trim().toLowerCase() === trimmed.toLowerCase())) return prev;
       const next = [
         ...prev,
         {
@@ -1338,25 +1370,123 @@ export default function App() {
     }
   };
 
-  // Batch Add Transactions Handler (e.g. for importing multiple recurring/fixed expenses from previous month)
+  // Batch Add Transactions Handler (supports both single-month recurring import & multi-month card installments)
   const handleBatchAddTransactions = async (
     newTxs: Array<Omit<Transaction, 'id' | 'rowIndex'> & { sheetTitle?: string }>
   ) => {
     if (!newTxs || newTxs.length === 0) return;
-    const targetSheetTitle = newTxs[0].sheetTitle || activeSheetTitle;
 
-    // Local optimistic update
-    const createdList: Transaction[] = newTxs.map((tx, idx) => ({
+    const resolveTargetTab = (tx: Omit<Transaction, 'id' | 'rowIndex'> & { sheetTitle?: string }) => {
+      let monthNum: number | null = null;
+      if (tx.date) {
+        const parts = tx.date.split('-');
+        if (parts.length >= 2) {
+          const m = parseInt(parts[1], 10);
+          if (!isNaN(m) && m >= 1 && m <= 12) monthNum = m;
+        }
+      }
+      if (monthNum === null && tx.sheetTitle) {
+        monthNum = extractMonthNumberFromTab(tx.sheetTitle);
+      }
+      const fallbackTab = monthNum ? `${monthNum}월` : tx.sheetTitle || activeSheetTitle || '11월';
+      if (monthNum && sheetTabs && sheetTabs.length > 0) {
+        const matched = findTabForMonth(sheetTabs, monthNum);
+        if (matched) return { sheetTitle: matched.title, monthNum };
+      }
+      const direct = sheetTabs?.find((t) => t.title === fallbackTab);
+      return { sheetTitle: direct ? direct.title : fallbackTab, monthNum: monthNum || 11 };
+    };
+
+    const resolvedItems = newTxs.map((tx, idx) => {
+      const { sheetTitle, monthNum } = resolveTargetTab(tx);
+      return { tx, sheetTitle, monthNum, idx };
+    });
+
+    // Update YearDashboardData across all affected months
+    setYearData((prev: YearDashboardData) => {
+      let updatedCats = prev.categories.map((cat) => ({
+        ...cat,
+        monthly: [...cat.monthly],
+      }));
+      let totalExpense = prev.totalExpense;
+      let totalIncome = prev.totalIncome;
+
+      resolvedItems.forEach(({ tx, monthNum }) => {
+        const mIdx = Math.min(11, Math.max(0, monthNum - 1));
+        let found = false;
+        updatedCats = updatedCats.map((cat) => {
+          if (cat.category === tx.category) {
+            found = true;
+            cat.monthly[mIdx] = (cat.monthly[mIdx] || 0) + tx.amount;
+            cat.annualTotal += tx.amount;
+          }
+          return cat;
+        });
+        if (!found) {
+          const monthly = new Array(12).fill(0);
+          monthly[mIdx] = tx.amount;
+          updatedCats.push({
+            category: tx.category,
+            annualTotal: tx.amount,
+            monthly,
+          });
+        }
+        if (tx.type === 'expense') totalExpense += tx.amount;
+        else if (tx.type === 'income') totalIncome += tx.amount;
+      });
+
+      return {
+        ...prev,
+        categories: updatedCats,
+        totalExpense,
+        totalIncome,
+      };
+    });
+
+    // Clear stale AnnualMatrixView month cache entries for affected months
+    if (typeof window !== 'undefined' && spreadsheetId) {
+      try {
+        const cacheKey = `smart_money_annual_month_cache_${spreadsheetId}`;
+        const raw = localStorage.getItem(cacheKey);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          resolvedItems.forEach(({ monthNum }) => {
+            if (parsed && parsed[monthNum]) {
+              delete parsed[monthNum];
+            }
+          });
+          localStorage.setItem(cacheKey, JSON.stringify(parsed));
+        }
+      } catch {
+        // Ignore cache cleanup errors
+      }
+    }
+
+    const groupedByTab = new Map<string, Array<Omit<Transaction, 'id' | 'rowIndex'> & { sheetTitle?: string }>>();
+    resolvedItems.forEach(({ tx, sheetTitle }) => {
+      const list = groupedByTab.get(sheetTitle) || [];
+      list.push({ ...tx, sheetTitle });
+      groupedByTab.set(sheetTitle, list);
+    });
+
+    const isMultiMonthBatch = groupedByTab.size > 1;
+
+    // Local optimistic update (only inject into active view or all if local mode)
+    const createdList: Transaction[] = resolvedItems.map(({ tx, sheetTitle, idx }) => ({
       ...tx,
-      id: `batch-fixed-${Date.now()}-${idx}`,
-      sheetTitle: targetSheetTitle,
+      id: `batch-${Date.now()}-${idx}`,
+      sheetTitle,
+      createdAt: tx.createdAt || Date.now() + idx,
     }));
-    setTransactions((prev) => [...createdList, ...prev]);
 
     const gasUrl = typeof window !== 'undefined' ? localStorage.getItem('smart_money_gas_url') : null;
     const canWriteToGoogle = Boolean(accessToken || gasUrl);
 
     if (isRealGoogleConnected && !canWriteToGoogle) {
+      setTransactions((prev) => [
+        ...createdList.filter((c) => !isMultiMonthBatch || c.sheetTitle === activeSheetTitle),
+        ...prev,
+      ]);
       setSyncToast({
         show: true,
         type: 'error',
@@ -1366,31 +1496,57 @@ export default function App() {
     }
 
     if (!canWriteToGoogle || !spreadsheetId) {
+      setPendingSyncList((prev) => {
+        const next = [...createdList, ...prev];
+        try {
+          localStorage.setItem(PENDING_SYNC_STORAGE_KEY, JSON.stringify(next));
+        } catch (e) {
+          console.warn('Could not save pending sync list:', e);
+        }
+        return next;
+      });
+      setTransactions((prev) => [...createdList, ...prev]);
+      const tabNames = Array.from(groupedByTab.keys()).join(', ');
       setSyncToast({
         show: true,
         type: 'info',
-        message: `📋 ${createdList.length}건의 고정지출이 등록되었습니다.`,
+        message: isMultiMonthBatch
+          ? `💳 할부 내역 ${createdList.length}건이 ${tabNames}에 자동 등록되었습니다.`
+          : `📋 ${createdList.length}건이 등록되었습니다.`,
       });
       return;
     }
 
-    try {
-      await appendBatchTransactions(
-        spreadsheetId,
-        targetSheetTitle,
-        analysis.mapping,
-        newTxs,
-        accessToken
-      );
+    setTransactions((prev) => [
+      ...createdList.filter((c) => !isMultiMonthBatch || c.sheetTitle === activeSheetTitle),
+      ...prev,
+    ]);
 
+    try {
+      for (const [tabTitle, groupTxs] of groupedByTab.entries()) {
+        await appendBatchTransactions(
+          spreadsheetId,
+          tabTitle,
+          analysis.mapping,
+          groupTxs,
+          accessToken
+        );
+      }
+
+      const tabNames = Array.from(groupedByTab.keys());
       setSyncToast({
         show: true,
         type: 'success',
-        message: `✅ Google 시트 [${targetSheetTitle}] 탭에 ${newTxs.length}건의 고정지출이 일괄 등록되었습니다!`,
+        message: isMultiMonthBatch
+          ? `✅ Google 시트 ${tabNames.length}개 월(${tabNames.join(', ')})에 총 ${newTxs.length}건의 할부 내역이 자동 등록되었습니다!`
+          : `✅ Google 시트 [${tabNames[0]}] 탭에 ${newTxs.length}건이 일괄 등록되었습니다!`,
       });
 
-      setActiveSheetTitle(targetSheetTitle);
-      await loadSheetData(spreadsheetId, targetSheetTitle, accessToken);
+      const targetReloadTab = isMultiMonthBatch ? activeSheetTitle : tabNames[0];
+      if (!isMultiMonthBatch) {
+        setActiveSheetTitle(targetReloadTab);
+      }
+      await loadSheetData(spreadsheetId, targetReloadTab, accessToken);
     } catch (err: any) {
       console.error('Batch add error:', err);
       setSyncToast({
@@ -2501,8 +2657,13 @@ export default function App() {
               transactions={transactions}
               activeSheetTitle={activeSheetTitle}
               onEditTransaction={handleEditTransaction}
+              analysis={analysis}
+              spreadsheetTitle={spreadsheetTitle}
               customCategories={customCategories}
               customPaymentMethods={customPaymentMethods}
+              onAddCustomCategory={handleAddCustomCategory}
+              onAddCustomPaymentMethod={handleAddCustomPaymentMethod}
+              onOpenCategoryManager={() => setIsCategoryModalOpen(true)}
               spreadsheetId={spreadsheetId}
               accessToken={accessToken}
               sheetTabs={sheetTabs}
@@ -2533,10 +2694,14 @@ export default function App() {
               onBatchDeleteTransactions={handleBatchDeleteTransactions}
               onAddTransaction={handleAddTransaction}
               isRealGoogleConnected={Boolean(isRealGoogleConnected && accessToken)}
+              analysis={analysis}
+              spreadsheetTitle={spreadsheetTitle}
               availableCategories={customCategories.filter((c) => c.isVisible).map((c) => c.name)}
               availablePaymentMethods={customPaymentMethods.filter((p) => p.isVisible).map((p) => p.name)}
               customCategories={customCategories}
+              customPaymentMethods={customPaymentMethods}
               onOpenCategoryManager={() => setIsCategoryModalOpen(true)}
+              onAddCustomCategory={handleAddCustomCategory}
               onAddCustomPaymentMethod={handleAddCustomPaymentMethod}
               onExportCurrentMonthToGoogleSheets={handleExportCurrentMonthToGoogleSheets}
               isExportingMonth={isExportingMonth}
@@ -2630,6 +2795,7 @@ export default function App() {
               customCategories={customCategories}
               customPaymentMethods={customPaymentMethods}
               transactions={transactions}
+              onAddCustomCategory={handleAddCustomCategory}
               onAddCustomPaymentMethod={handleAddCustomPaymentMethod}
               onOpenCategoryManager={() => {
                 setIsInputModalOpen(false);
