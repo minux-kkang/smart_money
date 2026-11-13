@@ -2089,10 +2089,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     );
                     const dateDividerRow = showDateDivider ? (
                       <tr aria-hidden="true" className="pointer-events-none">
-                        <td
-                          colSpan={isSelectionMode ? 6 : 5}
-                          className="p-0 border-0 bg-slate-100/90"
-                        >
+                        {isSelectionMode && (
+                          <td className="p-0 border-0 bg-slate-100/90">
+                            <div className="h-[3px] border-t-2 border-slate-400/75 bg-slate-100" />
+                          </td>
+                        )}
+                        <td className="p-0 border-0 bg-slate-100/90">
+                          <div className="h-[3px] border-t-2 border-slate-400/75 bg-slate-100" />
+                        </td>
+                        <td className="p-0 border-0 bg-slate-100/90 hidden sm:table-cell">
+                          <div className="h-[3px] border-t-2 border-slate-400/75 bg-slate-100" />
+                        </td>
+                        <td className="p-0 border-0 bg-slate-100/90">
+                          <div className="h-[3px] border-t-2 border-slate-400/75 bg-slate-100" />
+                        </td>
+                        <td className="p-0 border-0 bg-slate-100/90">
+                          <div className="h-[3px] border-t-2 border-slate-400/75 bg-slate-100" />
+                        </td>
+                        <td className="p-0 border-0 bg-slate-100/90 hidden sm:table-cell">
                           <div className="h-[3px] border-t-2 border-slate-400/75 bg-slate-100" />
                         </td>
                       </tr>
