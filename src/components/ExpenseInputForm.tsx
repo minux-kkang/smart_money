@@ -219,9 +219,13 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   const [isSpecial, setIsSpecial] = useState<boolean>(false);
   const [customCategoryInput, setCustomCategoryInput] = useState<boolean>(false);
   const [newCategoryText, setNewCategoryText] = useState<string>('');
+  const [categorySearchQuery, setCategorySearchQuery] = useState<string>('');
+  const [categoryActiveIndex, setCategoryActiveIndex] = useState<number>(0);
   const [showHiddenCategories, setShowHiddenCategories] = useState<boolean>(false);
   const [customPaymentInput, setCustomPaymentInput] = useState<boolean>(false);
   const [newPaymentText, setNewPaymentText] = useState<string>('');
+  const [paymentSearchQuery, setPaymentSearchQuery] = useState<string>('');
+  const [paymentActiveIndex, setPaymentActiveIndex] = useState<number>(0);
   const [showAllPaymentMethods, setShowAllPaymentMethods] = useState<boolean>(false);
   const [showSuggestions, setShowSuggestions] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -487,9 +491,37 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   const [showSubItemEntry, setShowSubItemEntry] = useState<boolean>(false);
   const [subItems, setSubItems] = useState<SubItem[]>([]);
 
+  const amountInputRef = useRef<HTMLInputElement>(null);
   const descInputRef = useRef<HTMLInputElement>(null);
   const categorySectionRef = useRef<HTMLDivElement>(null);
+  const categorySearchInputRef = useRef<HTMLInputElement>(null);
+  const paymentSectionRef = useRef<HTMLDivElement>(null);
+  const paymentSearchInputRef = useRef<HTMLInputElement>(null);
+  const memoInputRef = useRef<HTMLInputElement>(null);
+  const submitButtonRef = useRef<HTMLButtonElement>(null);
   const [categoryHighlighted, setCategoryHighlighted] = useState<boolean>(false);
+
+  const focusAndScroll = (
+    el: HTMLElement | null | undefined,
+    scrollTarget?: HTMLElement | null,
+    block: ScrollLogicalPosition = 'center'
+  ) => {
+    if (!el) return;
+    el.focus({ preventScroll: true });
+    requestAnimationFrame(() => {
+      (scrollTarget || el).scrollIntoView({ behavior: 'smooth', block });
+    });
+  };
+
+  // Focus amount input on modal open for rapid keyboard entry
+  useEffect(() => {
+    if (isModal && !initialOpenImport) {
+      const timer = setTimeout(() => {
+        amountInputRef.current?.focus({ preventScroll: true });
+      }, 60);
+      return () => clearTimeout(timer);
+    }
+  }, [isModal, initialOpenImport]);
 
   const subItemsSum = React.useMemo(() => {
     return subItems.reduce((acc, item) => acc + (Number(item.amount) || 0), 0);
@@ -633,6 +665,42 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     };
   }, [customCategories, analysis.detectedCategories, type, categoryFrequencyMap]);
 
+  // Filtered categories for inline search box (includes hidden categories when searching)
+  const filteredCategoryOptions = React.useMemo(() => {
+    const q = categorySearchQuery.trim().toLowerCase();
+    if (!q) {
+      return visibleCategories.map((name) => ({ name, isHidden: false }));
+    }
+    const combined = [
+      ...visibleCategories.map((name) => ({ name, isHidden: false })),
+      ...hiddenCategories.map((name) => ({ name, isHidden: true })),
+    ];
+    return combined
+      .filter((item) => item.name.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const aLower = a.name.toLowerCase();
+        const bLower = b.name.toLowerCase();
+        const aExact = aLower === q ? 0 : 1;
+        const bExact = bLower === q ? 0 : 1;
+        if (aExact !== bExact) return aExact - bExact;
+        const aStarts = aLower.startsWith(q) ? 0 : 1;
+        const bStarts = bLower.startsWith(q) ? 0 : 1;
+        if (aStarts !== bStarts) return aStarts - bStarts;
+        if (a.isHidden !== b.isHidden) return a.isHidden ? 1 : -1;
+        return 0;
+      });
+  }, [categorySearchQuery, visibleCategories, hiddenCategories]);
+
+  const hasExactCategoryMatch = React.useMemo(() => {
+    const q = categorySearchQuery.trim().toLowerCase();
+    if (!q) return true;
+    return [...visibleCategories, ...hiddenCategories].some((c) => c.toLowerCase() === q);
+  }, [categorySearchQuery, visibleCategories, hiddenCategories]);
+
+  useEffect(() => {
+    setCategoryActiveIndex(0);
+  }, [categorySearchQuery, type]);
+
   // Switch type and smoothly switch to the top frequency category of that type
   const handleTypeChange = (newType: TransactionType) => {
     setType(newType);
@@ -768,6 +836,57 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
       paymentFrequencyMap,
       showAllPaymentMethods,
     ]);
+
+  // Filtered payment methods for inline search box (searches across ALL available payment methods)
+  const filteredPaymentOptions = React.useMemo(() => {
+    const q = paymentSearchQuery.trim().toLowerCase();
+    if (!q) {
+      return displayPaymentMethods;
+    }
+    return allAvailablePaymentMethods
+      .filter((pm) => pm.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const aLower = a.toLowerCase();
+        const bLower = b.toLowerCase();
+        const aExact = aLower === q ? 0 : 1;
+        const bExact = bLower === q ? 0 : 1;
+        if (aExact !== bExact) return aExact - bExact;
+        const aStarts = aLower.startsWith(q) ? 0 : 1;
+        const bStarts = bLower.startsWith(q) ? 0 : 1;
+        if (aStarts !== bStarts) return aStarts - bStarts;
+        return 0;
+      });
+  }, [paymentSearchQuery, displayPaymentMethods, allAvailablePaymentMethods]);
+
+  const hasExactPaymentMatch = React.useMemo(() => {
+    const q = paymentSearchQuery.trim().toLowerCase();
+    if (!q) return true;
+    return allAvailablePaymentMethods.some((pm) => pm.toLowerCase() === q);
+  }, [paymentSearchQuery, allAvailablePaymentMethods]);
+
+  useEffect(() => {
+    setPaymentActiveIndex(0);
+  }, [paymentSearchQuery]);
+
+  const handleSelectOrAddCategoryFromSearch = (chosenName: string) => {
+    const trimmed = chosenName.trim();
+    if (!trimmed) return;
+    setCategory(trimmed);
+    setCategoryHighlighted(false);
+    setCategorySearchQuery('');
+    setCustomCategoryInput(false);
+  };
+
+  const handleSelectOrAddPaymentFromSearch = (chosenName: string, isNew: boolean) => {
+    const trimmed = chosenName.trim();
+    if (!trimmed) return;
+    setPaymentMethod(trimmed);
+    if (isNew && onAddCustomPaymentMethod) {
+      onAddCustomPaymentMethod(trimmed);
+    }
+    setPaymentSearchQuery('');
+    setCustomPaymentInput(false);
+  };
 
   const handleAddNewPaymentMethod = () => {
     const trimmed = newPaymentText.trim();
@@ -923,7 +1042,15 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   };
 
   const handleAmountKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Tab' && !e.shiftKey) {
+      e.preventDefault();
+      if (isFormula && formulaEval.isValid && formulaEval.value !== null) {
+        handleApplyFormula();
+      }
+      focusAndScroll(descInputRef.current);
+      return;
+    }
+    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
       if (isFormula && formulaEval.isValid && formulaEval.value !== null) {
         e.preventDefault();
         handleApplyFormula();
@@ -1144,6 +1271,8 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
       setAmountStr('');
       setDescription('');
       setMemo('');
+      setCategorySearchQuery('');
+      setPaymentSearchQuery('');
       setIsRecurring(false);
       setIsSpecial(false);
       setSubItems([]);
@@ -1358,6 +1487,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
               ₩
             </span>
             <input
+              ref={amountInputRef}
               type="text"
               inputMode="text"
               placeholder="0 (수식 입력 가능: 15000 + 4500, 3000 * 3)"
@@ -1468,19 +1598,37 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
               onChange={handleDescriptionChange}
               onFocus={() => setShowSuggestions(true)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') {
+                if (e.key === 'Tab') {
+                  e.preventDefault();
+                  setShowSuggestions(false);
+                  if (e.shiftKey) {
+                    focusAndScroll(amountInputRef.current);
+                  } else {
+                    if (description.trim() && !category.trim()) {
+                      setCategoryHighlighted(true);
+                      setTimeout(() => setCategoryHighlighted(false), 2500);
+                    }
+                    focusAndScroll(categorySearchInputRef.current, categorySectionRef.current);
+                  }
+                  return;
+                }
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   setShowSuggestions(false);
                   if (!category.trim()) {
                     setCategoryHighlighted(true);
-                    categorySectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     setTimeout(() => setCategoryHighlighted(false), 2500);
                   }
+                  focusAndScroll(categorySearchInputRef.current, categorySectionRef.current);
                 }
               }}
               onBlur={() => {
                 setTimeout(() => setShowSuggestions(false), 200);
-                if (description.trim() && !category.trim()) {
+                if (
+                  description.trim() &&
+                  !category.trim() &&
+                  document.activeElement !== categorySearchInputRef.current
+                ) {
                   setCategoryHighlighted(true);
                   categorySectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
                   setTimeout(() => setCategoryHighlighted(false), 2500);
@@ -1639,7 +1787,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
         </div>
 
 
-        {/* 5. Category Pills */}
+        {/* 5. Category Pills with Inline Search & Tagging */}
         <div
           ref={categorySectionRef}
           tabIndex={-1}
@@ -1651,9 +1799,9 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
               : ''
           }`}
         >
-          <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
+          <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1.5">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <label className="text-xs font-black text-slate-700 flex items-center gap-1">
+              <label className="text-xs font-black text-slate-700 flex items-center gap-1 shrink-0">
                 <Tag className="w-3.5 h-3.5 text-blue-600" />
                 <span>
                   {type === 'income' ? '수입 분류' : type === 'transfer' ? '이체 분류' : '지출 분류'}{' '}
@@ -1661,6 +1809,89 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                 </span>
                 <span className="text-red-500">*</span>
               </label>
+
+              {/* Inline Category Search Input */}
+              <div className="relative">
+                <Search className="w-3 h-3 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  ref={categorySearchInputRef}
+                  type="text"
+                  value={categorySearchQuery}
+                  onChange={(e) => {
+                    setCategorySearchQuery(e.target.value);
+                    if (customCategoryInput) setCustomCategoryInput(false);
+                  }}
+                  onFocus={() => {
+                    categorySectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Tab') {
+                      e.preventDefault();
+                      if (e.shiftKey) {
+                        focusAndScroll(descInputRef.current);
+                      } else {
+                        const q = categorySearchQuery.trim().toLowerCase();
+                        if (q && filteredCategoryOptions.length > 0) {
+                          const exact = filteredCategoryOptions.find((item) => item.name.toLowerCase() === q);
+                          if (exact) {
+                            handleSelectOrAddCategoryFromSearch(exact.name);
+                          } else if (filteredCategoryOptions.length === 1) {
+                            handleSelectOrAddCategoryFromSearch(filteredCategoryOptions[0].name);
+                          }
+                        }
+                        focusAndScroll(paymentSearchInputRef.current, paymentSectionRef.current);
+                      }
+                      return;
+                    }
+                    if (e.key === 'ArrowDown') {
+                      if (filteredCategoryOptions.length > 0) {
+                        e.preventDefault();
+                        setCategoryActiveIndex((prev) => (prev + 1) % filteredCategoryOptions.length);
+                      }
+                      return;
+                    }
+                    if (e.key === 'ArrowUp') {
+                      if (filteredCategoryOptions.length > 0) {
+                        e.preventDefault();
+                        setCategoryActiveIndex(
+                          (prev) => (prev - 1 + filteredCategoryOptions.length) % filteredCategoryOptions.length
+                        );
+                      }
+                      return;
+                    }
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                      e.preventDefault();
+                      const q = categorySearchQuery.trim();
+                      if (!q) {
+                        focusAndScroll(paymentSearchInputRef.current, paymentSectionRef.current);
+                        return;
+                      }
+                      if (filteredCategoryOptions.length > 0) {
+                        const safeIdx = Math.min(categoryActiveIndex, filteredCategoryOptions.length - 1);
+                        handleSelectOrAddCategoryFromSearch(filteredCategoryOptions[safeIdx].name);
+                      } else {
+                        handleSelectOrAddCategoryFromSearch(q);
+                      }
+                    }
+                  }}
+                  placeholder="분류 검색·태그 (Enter)"
+                  className="w-36 sm:w-44 pl-6 pr-6 py-1 bg-white border border-slate-300 rounded-lg text-[11px] font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 transition"
+                />
+                {categorySearchQuery && (
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => {
+                      setCategorySearchQuery('');
+                      categorySearchInputRef.current?.focus();
+                    }}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    title="검색어 지우기"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
 
               {!category ? (
                 <span className="text-[10px] sm:text-[11px] font-black text-rose-600 bg-rose-50 border border-rose-300 px-2 py-0.5 rounded-md animate-pulse">
@@ -1672,10 +1903,10 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                 </span>
               )}
 
-              <span className="text-[10px] text-slate-500 font-bold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+              <span className="text-[10px] text-slate-500 font-bold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200 hidden sm:inline">
                 지난달까지 빈도순
               </span>
-              {hiddenCategories.length > 0 && (
+              {hiddenCategories.length > 0 && !categorySearchQuery.trim() && (
                 <button
                   type="button"
                   onClick={() => setShowHiddenCategories(!showHiddenCategories)}
@@ -1714,6 +1945,13 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                 placeholder="새 분류 이름 직접 입력..."
                 value={newCategoryText}
                 onChange={(e) => setNewCategoryText(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                    e.preventDefault();
+                    handleAddNewCategory();
+                    setCategoryHighlighted(false);
+                  }
+                }}
                 className="flex-1 px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold focus:border-blue-600"
               />
               <button
@@ -1729,20 +1967,21 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
             </div>
           ) : (
             <div className="space-y-1.5">
-              {/* Visible Categories */}
+              {/* Visible / Filtered Categories */}
               <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
-                {visibleCategories.map((cat) => {
+                {filteredCategoryOptions.map((item, idx) => {
+                  const cat = item.name;
                   const stat = categoryStatsMap.get(cat);
                   const displayCount = stat?.displayCount || 0;
                   const label = stat?.displayLabel || '신규/미사용 분류';
+                  const isKeyboardHighlighted =
+                    Boolean(categorySearchQuery.trim()) &&
+                    idx === Math.min(categoryActiveIndex, filteredCategoryOptions.length - 1);
                   return (
                     <button
-                      key={cat}
+                      key={`${cat}-${item.isHidden ? 'h' : 'v'}`}
                       type="button"
-                      onClick={() => {
-                        setCategory(cat);
-                        setCategoryHighlighted(false);
-                      }}
+                      onClick={() => handleSelectOrAddCategoryFromSearch(cat)}
                       className={`px-3 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center gap-1 whitespace-nowrap ${
                         category === cat
                           ? type === 'expense'
@@ -1750,11 +1989,22 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                             : type === 'income'
                             ? 'bg-emerald-600 text-white shadow-sm'
                             : 'bg-sky-600 text-white shadow-sm'
+                          : isKeyboardHighlighted
+                          ? 'bg-blue-50 text-blue-800 border-2 border-blue-500 ring-2 ring-blue-200'
                           : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-200'
                       }`}
                       title={label}
                     >
                       <span>{cat}</span>
+                      {item.isHidden && (
+                        <span
+                          className={`text-[9px] font-bold px-1 rounded-sm ${
+                            category === cat ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-600'
+                          }`}
+                        >
+                          숨김
+                        </span>
+                      )}
                       {displayCount > 0 && (
                         <span
                           className={`text-[9px] font-bold px-1 rounded-sm ${
@@ -1767,10 +2017,25 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                     </button>
                   );
                 })}
+
+                {categorySearchQuery.trim() && !hasExactCategoryMatch && (
+                  <button
+                    type="button"
+                    onClick={() => handleSelectOrAddCategoryFromSearch(categorySearchQuery)}
+                    className="px-3 py-1.5 rounded-xl text-xs font-black bg-blue-600 hover:bg-blue-700 text-white shadow-xs transition cursor-pointer flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>"{categorySearchQuery.trim()}" 분류로 바로 태그</span>
+                  </button>
+                )}
+
+                {categorySearchQuery.trim() && filteredCategoryOptions.length === 0 && hasExactCategoryMatch && (
+                  <span className="text-xs text-slate-400 font-medium px-2 py-1">일치하는 분류가 없습니다.</span>
+                )}
               </div>
 
               {/* Expandable Hidden Categories */}
-              {showHiddenCategories && hiddenCategories.length > 0 && (
+              {!categorySearchQuery.trim() && showHiddenCategories && hiddenCategories.length > 0 && (
                 <div className="p-2 bg-slate-100/80 rounded-xl border border-dashed border-slate-300 space-y-1">
                   <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 px-1">
                     <span>숨김 처리된 분류 (클릭하여 선택 가능)</span>
@@ -1810,15 +2075,105 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
         </div>
 
 
-        {/* 6. Payment Method Selector */}
-        <div>
-          <div className="flex items-center justify-between mb-1.5">
-            <div className="flex items-center gap-1.5">
-              <label className="text-xs font-black text-slate-700 flex items-center gap-1">
+        {/* 6. Payment Method Selector with Inline Search & Tagging */}
+        <div ref={paymentSectionRef} tabIndex={-1} className="focus:outline-none">
+          <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <label className="text-xs font-black text-slate-700 flex items-center gap-1 shrink-0">
                 <CreditCard className="w-3.5 h-3.5 text-blue-600" />
                 <span>결제 수단 ({totalVisibleCount}개)</span>
               </label>
-              {hasMore && (
+
+              {/* Inline Payment Method Search Input */}
+              <div className="relative">
+                <Search className="w-3 h-3 text-slate-400 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  ref={paymentSearchInputRef}
+                  type="text"
+                  value={paymentSearchQuery}
+                  onChange={(e) => {
+                    setPaymentSearchQuery(e.target.value);
+                    if (customPaymentInput) setCustomPaymentInput(false);
+                  }}
+                  onFocus={() => {
+                    paymentSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Tab') {
+                      e.preventDefault();
+                      if (e.shiftKey) {
+                        focusAndScroll(categorySearchInputRef.current, categorySectionRef.current);
+                      } else {
+                        const q = paymentSearchQuery.trim().toLowerCase();
+                        if (q && filteredPaymentOptions.length > 0) {
+                          const exact = filteredPaymentOptions.find((pm) => pm.toLowerCase() === q);
+                          if (exact) {
+                            handleSelectOrAddPaymentFromSearch(exact, false);
+                          } else if (filteredPaymentOptions.length === 1) {
+                            handleSelectOrAddPaymentFromSearch(filteredPaymentOptions[0], false);
+                          }
+                        }
+                        focusAndScroll(memoInputRef.current, submitButtonRef.current, 'end');
+                      }
+                      return;
+                    }
+                    if (e.key === 'ArrowDown') {
+                      if (filteredPaymentOptions.length > 0) {
+                        e.preventDefault();
+                        setPaymentActiveIndex((prev) => (prev + 1) % filteredPaymentOptions.length);
+                      }
+                      return;
+                    }
+                    if (e.key === 'ArrowUp') {
+                      if (filteredPaymentOptions.length > 0) {
+                        e.preventDefault();
+                        setPaymentActiveIndex(
+                          (prev) => (prev - 1 + filteredPaymentOptions.length) % filteredPaymentOptions.length
+                        );
+                      }
+                      return;
+                    }
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                      e.preventDefault();
+                      const q = paymentSearchQuery.trim();
+                      if (!q) {
+                        focusAndScroll(memoInputRef.current, submitButtonRef.current, 'end');
+                        return;
+                      }
+                      if (filteredPaymentOptions.length > 0) {
+                        const safeIdx = Math.min(paymentActiveIndex, filteredPaymentOptions.length - 1);
+                        handleSelectOrAddPaymentFromSearch(filteredPaymentOptions[safeIdx], false);
+                      } else {
+                        handleSelectOrAddPaymentFromSearch(q, true);
+                      }
+                    }
+                  }}
+                  placeholder="결제수단 검색·태그 (Enter)"
+                  className="w-36 sm:w-44 pl-6 pr-6 py-1 bg-white border border-slate-300 rounded-lg text-[11px] font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-indigo-600 focus:ring-2 focus:ring-indigo-100 transition"
+                />
+                {paymentSearchQuery && (
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => {
+                      setPaymentSearchQuery('');
+                      paymentSearchInputRef.current?.focus();
+                    }}
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    title="검색어 지우기"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+
+              {paymentMethod && (
+                <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                  선택됨: <strong>{paymentMethod}</strong>
+                </span>
+              )}
+
+              {hasMore && !paymentSearchQuery.trim() && (
                 <button
                   type="button"
                   onClick={() => setShowAllPaymentMethods(!showAllPaymentMethods)}
@@ -1868,7 +2223,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                 value={newPaymentText}
                 onChange={(e) => setNewPaymentText(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
+                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
                     e.preventDefault();
                     handleAddNewPaymentMethod();
                   }
@@ -1886,20 +2241,25 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
           ) : (
             <div className="space-y-1.5">
               <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-1 bg-slate-50 p-2 rounded-xl border border-slate-200">
-                {displayPaymentMethods.map((pm) => {
+                {filteredPaymentOptions.map((pm, idx) => {
                   const stat = paymentStatsMap.get(pm);
                   const displayCount = stat?.displayCount || 0;
                   const label = stat?.displayLabel || undefined;
                   const badge = getPaymentGroupBadge(pm);
                   const isSelected = paymentMethod === pm;
+                  const isKeyboardHighlighted =
+                    Boolean(paymentSearchQuery.trim()) &&
+                    idx === Math.min(paymentActiveIndex, filteredPaymentOptions.length - 1);
                   return (
                     <button
                       key={pm}
                       type="button"
-                      onClick={() => setPaymentMethod(pm)}
+                      onClick={() => handleSelectOrAddPaymentFromSearch(pm, false)}
                       className={`px-2.5 py-1.5 rounded-xl text-xs font-extrabold transition cursor-pointer flex items-center gap-1.5 whitespace-nowrap ${
                         isSelected
                           ? 'bg-indigo-600 text-white shadow-sm'
+                          : isKeyboardHighlighted
+                          ? 'bg-indigo-50 text-indigo-900 border-2 border-indigo-500 ring-2 ring-indigo-200'
                           : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
                       }`}
                       title={label || `${badge?.group || '결제수단'}`}
@@ -1928,6 +2288,17 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                     </button>
                   );
                 })}
+
+                {paymentSearchQuery.trim() && !hasExactPaymentMatch && (
+                  <button
+                    type="button"
+                    onClick={() => handleSelectOrAddPaymentFromSearch(paymentSearchQuery, true)}
+                    className="px-2.5 py-1.5 rounded-xl text-xs font-black bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition cursor-pointer flex items-center gap-1 whitespace-nowrap"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>"{paymentSearchQuery.trim()}" 결제수단 추가/태그</span>
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -2215,19 +2586,37 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
             <span>메모 (선택)</span>
           </label>
           <input
+            ref={memoInputRef}
             type="text"
             placeholder="상세 메모 및 비고"
             value={memo}
             onChange={(e) => setMemo(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Tab') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                  focusAndScroll(paymentSearchInputRef.current, paymentSectionRef.current);
+                } else {
+                  focusAndScroll(submitButtonRef.current, submitButtonRef.current, 'end');
+                }
+              }
+            }}
             className="w-full px-4 py-2 bg-white border border-slate-300 rounded-xl text-xs sm:text-sm font-medium text-slate-900 focus:outline-none focus:border-blue-600"
           />
         </div>
 
         {/* Submit Button */}
         <button
+          ref={submitButtonRef}
           type="submit"
           disabled={isSubmitting}
-          className={`w-full py-4 rounded-xl font-black text-base text-white shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer ${
+          onKeyDown={(e) => {
+            if (e.key === 'Tab' && e.shiftKey) {
+              e.preventDefault();
+              focusAndScroll(memoInputRef.current, submitButtonRef.current, 'end');
+            }
+          }}
+          className={`w-full py-4 rounded-xl font-black text-base text-white shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer focus:outline-none focus:ring-4 focus:ring-blue-300 ${
             successAnimation
               ? 'bg-emerald-600 shadow-emerald-500/30'
               : type === 'expense'
