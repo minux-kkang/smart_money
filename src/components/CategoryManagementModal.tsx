@@ -94,7 +94,7 @@ export const CategoryManagementModal: React.FC<CategoryManagementModalProps> = (
   const handleDownloadExcelTemplate = (year: number = templateYear) => {
     try {
       downloadLedgerExcelTemplate(year, categories, paymentMethods);
-      onShowToast?.(`${year}년 가계부 템플릿(사용설명서·분류설정 포함)이 다운로드되었습니다.`, 'success');
+      onShowToast?.(`${year}년 기준 만년 가계부 템플릿(연도별 요약·분류설정 포함)이 다운로드되었습니다.`, 'success');
     } catch (e: any) {
       alert(`템플릿 다운로드 실패: ${e?.message || e}`);
     }
@@ -103,20 +103,20 @@ export const CategoryManagementModal: React.FC<CategoryManagementModalProps> = (
   // Create Google Sheet in User's Google Drive
   const handleCreateGoogleSheet = async (year: number = templateYear) => {
     if (!accessToken) {
-      if (confirm(`구글 드라이브에 [${year} 스마트가계부] 시트를 생성하려면 Google 로그인이 필요합니다.\n지금 로그인하시겠습니까?`)) {
+      if (confirm(`구글 드라이브에 [스마트 만년 가계부] 시트를 생성하려면 Google 로그인이 필요합니다.\n지금 로그인하시겠습니까?`)) {
         onLogin?.();
       }
       return;
     }
-    if (!confirm(`현재 구글 드라이브에 [${year} 스마트가계부] 스프레드시트를 생성하시겠습니까?\n(사용설명서, 분류설정, 1~12월 탭이 자동으로 생성됩니다)`)) {
+    if (!confirm(`현재 구글 드라이브에 [스마트 만년 가계부] (${year}년 탭 포함) 스프레드시트를 생성하시겠습니까?\n(📊 연도별 요약, ${year}, ⚙️ 분류설정, 📖 사용설명서 탭이 자동 생성됩니다)`)) {
       return;
     }
 
     try {
       setIsCreatingSheet(true);
-      const res = await createGoogleSheetWithTemplate(accessToken, year, categories, paymentMethods);
-      onShowToast?.(`구글 드라이브에 ${year}년 가계부 시트가 생성되었습니다!`, 'success');
-      onSpreadsheetCreated?.(res.spreadsheetId, `${year} 스마트가계부`);
+      const res = await createGoogleSheetWithTemplate(accessToken, year, categories, paymentMethods, '스마트 만년 가계부');
+      onShowToast?.(`구글 드라이브에 [스마트 만년 가계부] (${year} 탭) 시트가 생성되었습니다!`, 'success');
+      onSpreadsheetCreated?.(res.spreadsheetId, '스마트 만년 가계부');
     } catch (e: any) {
       alert(`시트 생성 실패: ${e?.message || e}`);
     } finally {

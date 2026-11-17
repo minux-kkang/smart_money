@@ -47,7 +47,7 @@ export const SpreadsheetPickerModal: React.FC<SpreadsheetPickerModalProps> = ({
 
   // New sheet creation form
   const [isCreating, setIsCreating] = useState(false);
-  const [newTitle, setNewTitle] = useState(() => `${new Date().getFullYear()}년 우리집 가계부`);
+  const [newTitle, setNewTitle] = useState(() => '스마트 만년 가계부');
   const [isSubmittingNew, setIsSubmittingNew] = useState(false);
 
   // Direct ID or URL input
@@ -74,7 +74,14 @@ export const SpreadsheetPickerModal: React.FC<SpreadsheetPickerModalProps> = ({
   try {
     var data = JSON.parse(e.postData.contents);
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = ss.getSheetByName(data.sheetTitle) || ss.getActiveSheet();
+    var targetTitle = data.sheetTitle;
+    var sheet = targetTitle ? ss.getSheetByName(targetTitle) : null;
+    if (!sheet && targetTitle) {
+      sheet = ss.insertSheet(targetTitle);
+      sheet.appendRow(['날짜', '구분', '분류', '내용/사용처', '금액', '결제수단', '지출유형', '세부품목', '비고']);
+      sheet.setFrozenRows(1);
+    }
+    if (!sheet) sheet = ss.getActiveSheet();
     
     if (data.action === 'append') {
       sheet.appendRow(data.rowValues);

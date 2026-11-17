@@ -53,7 +53,11 @@ import {
 } from '../services/categoryManager';
 import { evaluateMathFormula, containsFormula, sanitizeFormulaInput } from '../utils/mathFormula';
 import { getPaymentGroupBadge } from '../utils/paymentGroupUtils';
-import { extractMonthNumberFromTab } from '../services/googleSheets';
+import {
+  extractMonthNumberFromTab,
+  extractYearFromTab,
+  extractYearFromDate,
+} from '../services/googleSheets';
 import {
   buildInstallmentMemoTag,
   calculateInstallmentSchedule,
@@ -93,6 +97,7 @@ interface ExpenseInputFormProps {
   onFetchMonthTransactions?: (monthNum: number) => Promise<Transaction[]>;
   initialOpenImport?: boolean;
   initialDate?: string;
+  isYearlyUnifiedMode?: boolean;
 }
 
 const stripMachineMemoTags = (rawMemo?: string): string => {
@@ -135,7 +140,8 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   onFetchMonthTransactions,
   initialOpenImport = false,
   initialDate,
-}) => {
+  isYearlyUnifiedMode = false,
+}: ExpenseInputFormProps) => {
   const isEditMode = mode === 'edit' && Boolean(editingTransaction);
   const [type, setType] = useState<TransactionType>(() =>
     editingTransaction ? editingTransaction.type || 'expense' : 'expense'
@@ -192,9 +198,14 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
       return { date: initialDate, isRemembered: false };
     }
 
-    // 1. Year (from spreadsheetTitle e.g. "2026_가계부" or activeSheetTitle or current calendar year)
+    // 1. Year (from activeSheetTitle e.g. "2026" first, then spreadsheetTitle, then current calendar year)
+    const activeTabYear = extractYearFromTab(activeSheetTitle);
     const yearMatch = spreadsheetTitle?.match(/20\d{2}/) || activeSheetTitle?.match(/20\d{2}/);
-    const yearStr = yearMatch ? yearMatch[0] : String(new Date().getFullYear());
+    const yearStr = activeTabYear
+      ? String(activeTabYear)
+      : yearMatch
+      ? yearMatch[0]
+      : String(new Date().getFullYear());
 
     // 2. Month (from activeSheetTitle e.g. "10월" -> 10)
     const extractedMonth = extractMonthNumberFromTab(activeSheetTitle);
@@ -702,8 +713,20 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     }
   };
 
-  // Automatically calculate target month from the selected date!
+  // Automatically calculate target month / target tab display from the selected date!
+  const targetYearNum = React.useMemo(() => {
+    const dy = extractYearFromDate(date);
+    if (dy) return dy;
+    const ty = extractYearFromTab(activeSheetTitle);
+    if (ty) return ty;
+    const sm = spreadsheetTitle?.match(/20\d{2}/);
+    return sm ? parseInt(sm[0], 10) : new Date().getFullYear();
+  }, [date, activeSheetTitle, spreadsheetTitle]);
+
   const targetMonth = React.useMemo(() => {
+    if (isYearlyUnifiedMode || extractYearFromTab(activeSheetTitle) !== null) {
+      return `${targetYearNum} 통합 시트`;
+    }
     if (!date) return activeSheetTitle || '10월';
     const parts = date.split('-');
     if (parts.length >= 2) {
@@ -713,7 +736,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
       }
     }
     return activeSheetTitle || '10월';
-  }, [date, activeSheetTitle]);
+  }, [date, activeSheetTitle, isYearlyUnifiedMode, targetYearNum]);
 
   // Category frequency stats map (smart recency: last month prioritized at start of month, current month dynamically boosted)
   const categoryStatsMap = React.useMemo(() => {
@@ -1220,7 +1243,11 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     return parseInt(amountStr.replace(/[^0-9]/g, '') || '0', 10);
   }, [isFormula, formulaEval, amountStr]);
 
+  const isUnifiedYear = Boolean(isYearlyUnifiedMode || extractYearFromTab(activeSheetTitle) !== null);
+
   const inferredSheetYear = React.useMemo(() => {
+    const tabYear = extractYearFromTab(activeSheetTitle);
+    if (tabYear) return tabYear;
     const yMatch = spreadsheetTitle?.match(/20\d{2}/) || activeSheetTitle?.match(/20\d{2}/);
     if (yMatch) return parseInt(yMatch[0], 10);
     const dMatch = date?.match(/^(20\d{2})-/);
@@ -1235,13 +1262,23 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
 
   const installmentPreview = React.useMemo(() => {
     if (isEditMode || type !== 'expense' || !isInstallmentEnabled) return null;
-    return calculateInstallmentSchedule({
+    const rawPreview = calculateInstallmentSchedule({
       totalPrincipal: parsedBaseAmount,
       months: installmentMonths,
       annualInterestRate: annualInterestRateNum,
       startDate: date || formatLocalYMD(new Date()),
       sheetYear: inferredSheetYear,
     });
+    if (!isUnifiedYear) return rawPreview;
+    // In unified single-file multi-year mode, every year has its own tab (e.g. '2026', '2027')!
+    return {
+      ...rawPreview,
+      schedule: rawPreview.schedule.map((s) => ({
+        ...s,
+        sheetTitle: String(s.year),
+        recordedInSheet: true,
+      })),
+    };
   }, [
     isEditMode,
     type,
@@ -1251,6 +1288,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
     annualInterestRateNum,
     date,
     inferredSheetYear,
+    isUnifiedYear,
   ]);
 
   const installmentInSheetItems = React.useMemo(() => {
@@ -1260,10 +1298,10 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
   }, [installmentPreview]);
 
   const installmentFutureYearItems = React.useMemo(() => {
-    if (!installmentPreview) return [];
+    if (!installmentPreview || isUnifiedYear) return [];
     const sameYear = installmentPreview.schedule.filter((s) => s.recordedInSheet);
     return sameYear.length > 0 ? installmentPreview.schedule.filter((s) => !s.recordedInSheet) : [];
-  }, [installmentPreview]);
+  }, [installmentPreview, isUnifiedYear]);
 
   const handleInsertChar = (ch: string) => {
     if (ch === '=') {
@@ -3305,7 +3343,9 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                                   </strong>
                                 </span>
                                 <span className="text-[10.5px] font-bold text-indigo-700">
-                                  {inferredSheetYear}년 시트 {installmentInSheetItems.length}건 자동 입력
+                                  {isUnifiedYear
+                                    ? `통합 파일 연도 탭 ${installmentInSheetItems.length}건 자동 입력`
+                                    : `${inferredSheetYear}년 시트 ${installmentInSheetItems.length}건 자동 입력`}
                                 </span>
                               </div>
 
@@ -3334,6 +3374,12 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
                                   ℹ️ 내년({installmentFutureYearItems[0].year}년) 이후 {installmentFutureYearItems.length}회차는 올해({inferredSheetYear}) 시트 합계 왜곡을 막기 위해 시트에는 쓰지 않고, 대시보드 <strong>💳 할부 현황</strong>에서 잔여 회차로 계속 추적됩니다.
                                 </p>
                               )}
+                              {isUnifiedYear &&
+                                installmentPreview.schedule.some((s) => s.year !== inferredSheetYear) && (
+                                  <p className="text-[10.5px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1 font-bold">
+                                    ✨ 연도 통합 모드: 내년 회차도 같은 파일의 해당 연도 탭(예: [{installmentPreview.schedule.find((s) => s.year !== inferredSheetYear)?.year}])에 자동으로 함께 기록됩니다.
+                                  </p>
+                                )}
                             </div>
                           </>
                         )}

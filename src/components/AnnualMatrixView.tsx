@@ -36,7 +36,7 @@ import {
   formatShortDate,
 } from '../types/ledger';
 import { getPaymentGroupBadge } from '../utils/paymentGroupUtils';
-import { extractMonthNumberFromTab } from '../services/googleSheets';
+import { extractMonthNumberFromTab, extractYearFromTab } from '../services/googleSheets';
 import { ExpenseInputForm } from './ExpenseInputForm';
 
 interface AnnualMatrixViewProps {
@@ -239,10 +239,15 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
   const [filterZero, setFilterZero] = useState<boolean>(true);
   const [searchCat, setSearchCat] = useState<string>('');
 
-  // Local storage key for persistent annual matrix month cache
+  const activeTabYear = useMemo(() => extractYearFromTab(activeSheetTitle), [activeSheetTitle]);
+
+  // Local storage key for persistent annual matrix month cache (scoped by year when in unified year tab)
   const storageKey = useMemo(
-    () => `smart_money_annual_month_cache_${spreadsheetId || 'default'}`,
-    [spreadsheetId]
+    () =>
+      `smart_money_annual_month_cache_${spreadsheetId || 'default'}${
+        activeTabYear ? `_${activeTabYear}` : ''
+      }`,
+    [spreadsheetId, activeTabYear]
   );
 
   // Multi-month real transactions cache: monthNumber (1..12) -> Transaction[]
@@ -250,7 +255,11 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
   const [monthCache, setMonthCache] = useState<Record<number, Transaction[]>>(() => {
     if (typeof window === 'undefined') return {};
     try {
-      const saved = localStorage.getItem(`smart_money_annual_month_cache_${spreadsheetId || 'default'}`);
+      const saved = localStorage.getItem(
+        `smart_money_annual_month_cache_${spreadsheetId || 'default'}${
+          activeTabYear ? `_${activeTabYear}` : ''
+        }`
+      );
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && typeof parsed === 'object') {
@@ -263,6 +272,22 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     return {};
   });
   const [isLoadingMonthData, setIsLoadingMonthData] = useState<boolean>(false);
+
+  // Reset & reload monthCache when switching year or spreadsheet
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          setMonthCache(sanitizeMonthCache(parsed));
+          return;
+        }
+      }
+    } catch {}
+    setMonthCache({});
+  }, [storageKey]);
 
   // Automatically save monthCache to localStorage on updates
   useEffect(() => {
@@ -315,6 +340,28 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     if (!onFetchMonthTransactions || isSyncingAllMonths) return;
     setIsSyncingAllMonths(true);
     try {
+      // Unified year tab contains 1~12월 in a single sheet!
+      if (activeTabYear !== null) {
+        setSyncProgress(`${activeTabYear}년 통합 시트 조회 중...`);
+        const allTxs = await onFetchMonthTransactions(0);
+        const clean = (allTxs || []).filter(
+          (t) => !t.id?.startsWith('user-2026-') && !t.id?.startsWith('sample-')
+        );
+        const grouped: Record<number, Transaction[]> = {};
+        for (let m = 1; m <= 12; m++) grouped[m] = [];
+        clean.forEach((t) => {
+          const m = extractMonthNumber(t.date, t.sheetTitle || activeSheetTitle);
+          if (m !== null && m >= 1 && m <= 12) grouped[m].push(t);
+        });
+        setMonthCache(grouped);
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(grouped));
+        } catch {}
+        setSyncProgress(`${activeTabYear}년 전체 동기화 완료!`);
+        setTimeout(() => setSyncProgress(''), 3000);
+        return;
+      }
+
       const updatedCache: Record<number, Transaction[]> = { ...monthCache };
       for (let m = 1; m <= 12; m++) {
         setSyncProgress(`${m}월 조회 중... (${m}/12)`);
@@ -347,6 +394,8 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
   // Auto-sync in background on mount: if monthCache is missing months and onFetchMonthTransactions is ready
   useEffect(() => {
     if (!onFetchMonthTransactions) return;
+    // Unified year tab already loads 1~12월 together in props.transactions!
+    if (activeTabYear !== null && transactions && transactions.length > 0) return;
 
     // Check months present in sheetTabs or 1..12
     const targetMonths: number[] = [];
@@ -393,17 +442,34 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [onFetchMonthTransactions, sheetTabs, storageKey]);
+  }, [onFetchMonthTransactions, sheetTabs, storageKey, activeTabYear]);
 
   // Local optimistic transaction overrides for immediate UI reflection in matrix view
   const [localTxOverrides, setLocalTxOverrides] = useState<Transaction[]>([]);
 
   // Seed monthCache whenever props.transactions updates with real data for active sheet
   useEffect(() => {
-    if (!transactions || transactions.length === 0) return;
+    if (!transactions) return;
     const realOnly = transactions.filter(
       (t) => !t.id?.startsWith('user-2026-') && !t.id?.startsWith('sample-')
     );
+
+    // Unified year tab holds all 12 months directly: populate 1..12 cleanly
+    if (activeTabYear !== null) {
+      if (realOnly.length === 0 && !isRealGoogleConnected) return;
+      const groupedAll: Record<number, Transaction[]> = {};
+      for (let m = 1; m <= 12; m++) groupedAll[m] = [];
+      realOnly.forEach((t) => {
+        const m = extractMonthNumber(t.date, t.sheetTitle || activeSheetTitle);
+        if (m !== null && m >= 1 && m <= 12) groupedAll[m].push(t);
+      });
+      setMonthCache(groupedAll);
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(groupedAll));
+      } catch (e) {}
+      return;
+    }
+
     if (realOnly.length === 0) return;
 
     // Properly group transactions by each individual item's true month!
@@ -436,7 +502,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
       }
       return prev;
     });
-  }, [transactions, activeSheetTitle, storageKey]);
+  }, [transactions, activeSheetTitle, storageKey, activeTabYear, isRealGoogleConnected]);
 
   // When user clicks a matrix cell for a specific month, fetch real Google Sheet tab if not yet loaded
   useEffect(() => {
@@ -673,12 +739,12 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
     const totalIncome = hasRealSource ? computedIncome : (yearData.totalIncome || 0);
 
     return {
-      year: yearData.year || 2026,
+      year: activeTabYear || yearData.year || 2026,
       totalIncome,
       totalExpense,
       categories,
     };
-  }, [yearData, monthCache, effectiveTransactions, activeSheetTitle, isRealGoogleConnected, spreadsheetId, sheetTabs, customCategories]);
+  }, [yearData, monthCache, effectiveTransactions, activeSheetTitle, activeTabYear, isRealGoogleConnected, spreadsheetId, sheetTabs, customCategories]);
 
   // Map each category to a distinct color
   const categoryColorMap = useMemo(() => {
@@ -1008,13 +1074,13 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
         </div>
       )}
 
-      {/* 2026 Annual Overview Summary Card (Consolidated & Zero Waste) */}
+      {/* Annual Overview Summary Card (Consolidated & Zero Waste) */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
         {/* Main Row: Annual Net Balance */}
         <div className="p-3.5 sm:p-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-xs text-slate-300 font-bold">2026 연간 누적 잔액</span>
+              <span className="text-xs text-slate-300 font-bold">{effectiveYearData.year} 연간 누적 잔액</span>
               <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-blue-500/30 text-blue-200">
                 연간 저축률 {savingRate}%
               </span>
@@ -1063,7 +1129,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
               <div className="flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
                 <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">
-                  2026 총 수입
+                  {effectiveYearData.year} 총 수입
                 </span>
               </div>
               <p className="text-sm sm:text-lg font-black text-emerald-600 truncate mt-0.5">
@@ -1081,7 +1147,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
               <div className="flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
                 <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">
-                  2026 총 지출
+                  {effectiveYearData.year} 총 지출
                 </span>
               </div>
               <p className="text-sm sm:text-lg font-black text-rose-600 truncate mt-0.5">
@@ -1103,10 +1169,10 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
               <Sparkles className="w-4 h-4 text-blue-600 shrink-0" />
               <span className="whitespace-nowrap">
                 {selectedCategoryFilters.length === 0
-                  ? '2026년 월별 총 지출 추이 (1월 ~ 12월)'
+                  ? `${effectiveYearData.year}년 월별 총 지출 추이 (1월 ~ 12월)`
                   : selectedCategoryFilters.length === 1
-                  ? `2026년 월별 [${selectedCategoryFilters[0]}] 지출 추이`
-                  : `2026년 월별 선택 카테고리 지출 추이 (${selectedCategoryFilters.length}개 선택)`}
+                  ? `${effectiveYearData.year}년 월별 [${selectedCategoryFilters[0]}] 지출 추이`
+                  : `${effectiveYearData.year}년 월별 선택 카테고리 지출 추이 (${selectedCategoryFilters.length}개 선택)`}
               </span>
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
@@ -1580,7 +1646,7 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
           <div>
             <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
               <Table className="w-4 h-4 text-emerald-600" />
-              <span>연간 카테고리별 지출 매트릭스 (2026 가계부 Dashboard)</span>
+              <span>연간 카테고리별 지출 매트릭스 ({effectiveYearData.year} 가계부)</span>
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
               특정 월의 카테고리 금액을 클릭하면 해당 항목들의 상세 리스트를 확인하고 바로 수정할 수 있습니다.

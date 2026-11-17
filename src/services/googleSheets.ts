@@ -13,17 +13,192 @@ import {
   serializeSubItemsToMemo,
 } from './subItemStorage';
 
+export const STANDARD_9_HEADERS = [
+  '날짜',
+  '구분',
+  '분류',
+  '내용/사용처',
+  '금액',
+  '결제수단',
+  '지출유형',
+  '세부품목',
+  '비고',
+];
+
+export type SheetLayoutMode = 'yearly' | 'monthly';
+
+export function getStoredLayoutMode(spreadsheetId?: string): SheetLayoutMode | null {
+  if (typeof window === 'undefined' || !spreadsheetId) return null;
+  try {
+    const val = localStorage.getItem(`smart_money_layout_mode_${spreadsheetId}`);
+    if (val === 'yearly' || val === 'monthly') return val;
+  } catch {
+    // ignore storage errors
+  }
+  return null;
+}
+
+export function setStoredLayoutMode(spreadsheetId: string, mode: SheetLayoutMode): void {
+  if (typeof window === 'undefined' || !spreadsheetId) return;
+  try {
+    localStorage.setItem(`smart_money_layout_mode_${spreadsheetId}`, mode);
+  } catch {
+    // ignore storage errors
+  }
+}
+
+/**
+ * Extract 4-digit year (2000..2099) if tab represents a full year (e.g. "2026", "2026년", "2025 가계부").
+ * Returns null for month tabs like "2026-01", "2026.01", "10월", etc.
+ */
+export function extractYearFromTab(title?: string): number | null {
+  if (!title) return null;
+  const t = title.trim();
+  if (!t) return null;
+  // Never misclassify year-month tabs like "2026-01", "2026.1", "2026년 1월"
+  if (extractMonthNumberFromTab(t) !== null) return null;
+  // Also exclude matrix/dashboard/config/manual tabs
+  if (/dashboard|대시보드|요약|matrix|연간|분류설정|설정|사용설명서|설명서/i.test(t)) return null;
+
+  const exactMatch = t.match(/^(20\d{2})\s*년?$/);
+  if (exactMatch) {
+    return parseInt(exactMatch[1], 10);
+  }
+
+  const labelMatch = t.match(/(?:^|[^0-9])(20\d{2})(?:년|\s*(?:통합|가계부|내역))?(?:$|[^0-9])/);
+  if (labelMatch && !/[-\/.]\s*\d{1,2}/.test(t)) {
+    return parseInt(labelMatch[1], 10);
+  }
+
+  return null;
+}
+
+export function extractYearFromDate(dateStr?: string): number | null {
+  if (!dateStr) return null;
+  const m = dateStr.trim().match(/^(20\d{2})\s*[-./]/);
+  if (m) return parseInt(m[1], 10);
+  return null;
+}
+
+export function findTabForYear(
+  tabs: Array<{ id: number; title: string }>,
+  targetYear: number
+): { id: number; title: string } | undefined {
+  if (!tabs || tabs.length === 0) return undefined;
+  const exact = tabs.find((t) => {
+    const trimmed = (t.title || '').trim();
+    return trimmed === String(targetYear) || trimmed === `${targetYear}년`;
+  });
+  if (exact) return exact;
+  return tabs.find((t) => extractYearFromTab(t.title) === targetYear);
+}
+
+export function findAllYearTabs(
+  tabs: Array<{ id: number; title: string }>
+): Array<{ id: number; title: string; year: number }> {
+  if (!tabs || tabs.length === 0) return [];
+  const map = new Map<number, { id: number; title: string; year: number }>();
+  tabs.forEach((t) => {
+    const y = extractYearFromTab(t.title);
+    if (y !== null) {
+      const existing = map.get(y);
+      // Prefer exact "2026" or "2026년" over verbose titles
+      if (!existing || /^\d{4}년?$/.test(t.title.trim())) {
+        map.set(y, { id: t.id, title: t.title, year: y });
+      }
+    }
+  });
+  return Array.from(map.values()).sort((a, b) => b.year - a.year);
+}
+
+export function detectSheetLayoutMode(
+  tabs: Array<{ id: number; title: string; hidden?: boolean }>,
+  activeSheetTitle?: string,
+  spreadsheetId?: string
+): SheetLayoutMode {
+  if (activeSheetTitle && extractYearFromTab(activeSheetTitle) !== null) {
+    return 'yearly';
+  }
+  const stored = getStoredLayoutMode(spreadsheetId);
+  const yearTabs = findAllYearTabs(tabs);
+  const hasVisibleMonthTabs = tabs.some(
+    (t) => !t.hidden && extractMonthNumberFromTab(t.title) !== null
+  );
+  const hasAnyMonthTabs = tabs.some((t) => extractMonthNumberFromTab(t.title) !== null);
+  if (stored === 'yearly' && yearTabs.length > 0) return 'yearly';
+  if (yearTabs.length > 0 && !hasVisibleMonthTabs) return 'yearly';
+  if (stored === 'monthly' && hasAnyMonthTabs) return 'monthly';
+  if (yearTabs.length > 0 && tabs.some((t) => t.title.trim() === String(yearTabs[0].year))) {
+    return stored || 'monthly';
+  }
+  return 'monthly';
+}
+
+export function computeYearDashboardDataFromTransactions(
+  txs: Transaction[],
+  year: number
+): YearDashboardData {
+  const catMap = new Map<string, number[]>();
+  let totalIncome = 0;
+  let totalExpense = 0;
+
+  (txs || []).forEach((t) => {
+    const mMatch = t.date?.match(/^\d{4}-(\d{2})/);
+    const mNum = mMatch ? parseInt(mMatch[1], 10) : extractMonthNumberFromTab(t.sheetTitle);
+    const mIdx = mNum && mNum >= 1 && mNum <= 12 ? mNum - 1 : 0;
+
+    if (t.type === 'income') {
+      totalIncome += Number(t.amount) || 0;
+      return;
+    }
+    if (t.type && t.type !== 'expense') return;
+
+    const amt = Number(t.amount) || 0;
+    totalExpense += amt;
+
+    if (t.subItems && t.subItems.length > 0) {
+      t.subItems.forEach((sub) => {
+        const subCat = (sub.category || t.category || '기타').trim();
+        if (!catMap.has(subCat)) catMap.set(subCat, new Array(12).fill(0));
+        catMap.get(subCat)![mIdx] += Number(sub.amount) || 0;
+      });
+    } else {
+      const cat = (t.category || '기타').trim();
+      if (!catMap.has(cat)) catMap.set(cat, new Array(12).fill(0));
+      catMap.get(cat)![mIdx] += amt;
+    }
+  });
+
+  const categories: CategoryMonthlyData[] = Array.from(catMap.entries())
+    .map(([category, monthly]) => ({
+      category,
+      monthly,
+      annualTotal: monthly.reduce((s, v) => s + v, 0),
+    }))
+    .sort((a, b) => b.annualTotal - a.annualTotal);
+
+  return {
+    year,
+    totalIncome,
+    totalExpense,
+    categories,
+  };
+}
+
 /**
  * Fetch spreadsheet metadata (title and sheet tabs)
  */
 export async function getSpreadsheetDetails(
   spreadsheetId: string,
   accessToken?: string | null
-): Promise<{ title: string; sheets: Array<{ id: number; title: string; index: number }> }> {
+): Promise<{
+  title: string;
+  sheets: Array<{ id: number; title: string; index: number; hidden?: boolean }>;
+}> {
   if (accessToken) {
     try {
       const res = await fetch(
-        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=properties.title,sheets.properties(sheetId,title,index)`,
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=properties.title,sheets.properties(sheetId,title,index,hidden)`,
         {
           headers: {
             Authorization: `Bearer ${accessToken}`,
@@ -38,6 +213,7 @@ export async function getSpreadsheetDetails(
           id: s.properties.sheetId,
           title: s.properties.title,
           index: s.properties.index,
+          hidden: Boolean(s.properties?.hidden),
         }));
         return { title, sheets };
       }
@@ -185,7 +361,10 @@ export async function getSheetValues(
  * Detect whether rows belong to an Annual Summary Matrix (Dashboard) sheet
  */
 export function isAnnualMatrixSheet(rows: string[][], sheetTitle?: string): boolean {
-  if (sheetTitle && /dashboard|대시보드|연간요약|연간합계/i.test(sheetTitle)) {
+  if (
+    sheetTitle &&
+    /dashboard|대시보드|연도별\s*요약|연도\s*요약|연간\s*요약|연간합계/i.test(sheetTitle)
+  ) {
     return true;
   }
   if (!rows || rows.length === 0) return false;
@@ -578,6 +757,12 @@ export function analyzeSheetStructure(
     }
   }
 
+  // Infer calendar year from activeSheetTitle (e.g. "2025") or spreadsheetTitle (e.g. "2025 가계부")
+  const tabYearNum = extractYearFromTab(activeSheetTitle);
+  const titleYearMatch = spreadsheetTitle?.match(/(?:^|[^0-9])(20\d{2})(?:[^0-9]|$)/);
+  const inferredYear = tabYearNum || (titleYearMatch ? parseInt(titleYearMatch[1], 10) : 2026);
+  const tabMonthNumForSample = extractMonthNumberFromTab(activeSheetTitle);
+
   // Fallback for Date by inspecting sample row values
   const sampleDataRows = rows.slice(bestHeaderRowIndex + 1, bestHeaderRowIndex + 25);
 
@@ -587,7 +772,7 @@ export function analyzeSheetStructure(
       if (/^(순번|번호|no|id|num|index)$/i.test(cleanH)) continue;
       let dateHits = 0;
       for (const r of sampleDataRows) {
-        if (r && r[c] && normalizeDateString(String(r[c]))) {
+        if (r && r[c] && normalizeDateString(String(r[c]), tabMonthNumForSample || undefined, inferredYear)) {
           dateHits++;
         }
       }
@@ -834,7 +1019,7 @@ export function analyzeSheetStructure(
 
     // Normalize Date: YYYY-MM-DD
     const tabMonthNum = extractMonthNumberFromTab(activeSheetTitle);
-    const normalizedDate = normalizeDateString(rawDate, tabMonthNum || undefined);
+    const normalizedDate = normalizeDateString(rawDate, tabMonthNum || undefined, inferredYear);
 
     // CRITICAL GHOST ROW FILTER:
     // In pre-formatted Google Sheets templates (like 2026_가계부_최종_대시보드), sheets often have
@@ -854,8 +1039,8 @@ export function analyzeSheetStructure(
       return; // Skip blank formula row
     }
 
-    const defaultMonth = tabMonthNum ? String(tabMonthNum).padStart(2, '0') : '10';
-    const fallbackDate = `2026-${defaultMonth}-15`;
+    const defaultMonth = tabMonthNum ? String(tabMonthNum).padStart(2, '0') : '01';
+    const fallbackDate = `${inferredYear}-${defaultMonth}-15`;
     const finalDate = normalizedDate || fallbackDate;
 
     const isRecurring = Boolean(
@@ -1078,10 +1263,16 @@ export async function appendTransactionRow(
     });
   }
 
-  // 4. Find the EXACT row to write into:
-  // First empty row immediately after headerRowIndex, right beneath previous data!
+  // 4. Find the EXACT row to write into & track last filled row's date to avoid unnecessary 3,000-row sorts
+  const contextYear =
+    extractYearFromTab(sheetTitle) ||
+    extractYearFromDate(transaction.date) ||
+    2026;
+  const contextMonth = extractMonthNumberFromTab(sheetTitle) || undefined;
   let targetRowNumber = headerRowIndex + 2; // 1-indexed row number in Google Sheets
   let foundEmptyRow = false;
+  let lastFilledDate: string | null = null;
+  let isExistingSorted = true;
 
   for (let r = headerRowIndex + 1; r < rows.length; r++) {
     const row = rows[r] || [];
@@ -1091,9 +1282,24 @@ export async function appendTransactionRow(
     const catVal = mapping.categoryCol >= 0 && row[mapping.categoryCol] ? String(row[mapping.categoryCol]).trim() : '';
 
     if (!dateVal && !descVal && !amtVal && !catVal) {
-      targetRowNumber = r + 1;
-      foundEmptyRow = true;
-      break;
+      if (!foundEmptyRow) {
+        targetRowNumber = r + 1;
+        foundEmptyRow = true;
+      }
+      continue;
+    }
+
+    // If a non-empty row appears AFTER an empty row, we must sort/compact
+    if (foundEmptyRow) {
+      isExistingSorted = false;
+    }
+
+    const parsedDate = normalizeDateString(dateVal, contextMonth, contextYear);
+    if (parsedDate) {
+      if (lastFilledDate && parsedDate < lastFilledDate) {
+        isExistingSorted = false;
+      }
+      lastFilledDate = parsedDate;
     }
   }
 
@@ -1265,8 +1471,14 @@ export async function appendTransactionRow(
     throw new Error(err?.error?.message || `구글 시트 '${sheetTitle}'의 ${targetRowNumber}행에 항목 추가 실패`);
   }
 
-  // Automatically sort rows in Google Sheets by date
-  await sortSheetRowsByDate(spreadsheetId, sheetTitle, mapping.dateCol, accessToken, 'ASCENDING');
+  // Fast-path: skip expensive full-sheet sortRange when appending chronologically at the end!
+  const needsSort =
+    !isExistingSorted ||
+    Boolean(lastFilledDate && transaction.date && transaction.date < lastFilledDate);
+
+  if (needsSort) {
+    await sortSheetRowsByDate(spreadsheetId, sheetTitle, mapping.dateCol, accessToken, 'ASCENDING');
+  }
 
   return { rowIndex: targetRowNumber, sheetTitle };
 }
@@ -1375,9 +1587,17 @@ export async function appendBatchTransactions(
     });
   }
 
-  // 4. Find targetRowNumber (first empty row after headerRowIndex)
+  // 4. Find targetRowNumber (first empty row after headerRowIndex) & track last existing date
+  const contextYear =
+    extractYearFromTab(sheetTitle) ||
+    extractYearFromDate(transactions[0]?.date) ||
+    2026;
+  const contextMonth = extractMonthNumberFromTab(sheetTitle) || undefined;
   let targetRowNumber = headerRowIndex + 2;
   let foundEmptyRow = false;
+  let lastFilledDate: string | null = null;
+  let isExistingSorted = true;
+
   for (let r = headerRowIndex + 1; r < rows.length; r++) {
     const row = rows[r] || [];
     const dateVal = mapping.dateCol >= 0 && row[mapping.dateCol] ? String(row[mapping.dateCol]).trim() : '';
@@ -1386,9 +1606,23 @@ export async function appendBatchTransactions(
     const catVal = mapping.categoryCol >= 0 && row[mapping.categoryCol] ? String(row[mapping.categoryCol]).trim() : '';
 
     if (!dateVal && !descVal && !amtVal && !catVal) {
-      targetRowNumber = r + 1;
-      foundEmptyRow = true;
-      break;
+      if (!foundEmptyRow) {
+        targetRowNumber = r + 1;
+        foundEmptyRow = true;
+      }
+      continue;
+    }
+
+    if (foundEmptyRow) {
+      isExistingSorted = false;
+    }
+
+    const parsedDate = normalizeDateString(dateVal, contextMonth, contextYear);
+    if (parsedDate) {
+      if (lastFilledDate && parsedDate < lastFilledDate) {
+        isExistingSorted = false;
+      }
+      lastFilledDate = parsedDate;
     }
   }
 
@@ -1539,8 +1773,23 @@ export async function appendBatchTransactions(
     throw new Error(err?.error?.message || `구글 시트 '${sheetTitle}'에 ${batchRowValues.length}건 일괄 추가 실패`);
   }
 
-  // Automatically sort rows in Google Sheets by date
-  await sortSheetRowsByDate(spreadsheetId, sheetTitle, mapping.dateCol, accessToken, 'ASCENDING');
+  // Fast-path: check if batch dates are monotonic ascending and >= lastFilledDate
+  let isBatchMonotonic = true;
+  for (let i = 1; i < transactions.length; i++) {
+    if ((transactions[i].date || '') < (transactions[i - 1].date || '')) {
+      isBatchMonotonic = false;
+      break;
+    }
+  }
+  const firstBatchDate = transactions[0]?.date || '';
+  const needsSort =
+    !isExistingSorted ||
+    !isBatchMonotonic ||
+    Boolean(lastFilledDate && firstBatchDate && firstBatchDate < lastFilledDate);
+
+  if (needsSort) {
+    await sortSheetRowsByDate(spreadsheetId, sheetTitle, mapping.dateCol, accessToken, 'ASCENDING');
+  }
 
   return { count: batchRowValues.length, sheetTitle };
 }
@@ -1935,8 +2184,11 @@ export async function addMonthlySheetTab(
   spreadsheetId: string,
   sheetTitle: string,
   headers: string[],
-  accessToken: string
+  accessToken: string,
+  initialRowCount?: number
 ): Promise<{ sheetId: number; title: string }> {
+  const defaultRows =
+    initialRowCount || (extractYearFromTab(sheetTitle) !== null ? 1000 : 200);
   const addSheetRes = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,
     {
@@ -1952,8 +2204,8 @@ export async function addMonthlySheetTab(
               properties: {
                 title: sheetTitle,
                 gridProperties: {
-                  rowCount: 200,
-                  columnCount: 10,
+                  rowCount: defaultRows,
+                  columnCount: Math.max(10, headers?.length || 9),
                   frozenRowCount: 1,
                 },
               },
@@ -2515,11 +2767,17 @@ export function findTabForMonth(
 /**
  * Helper to normalize varied date formats to YYYY-MM-DD
  * Supports contextMonth when row only has day number (e.g. "5", "15", "5일")
+ * and contextYear when date omits the year (e.g. "3.15", "3월 15일").
  */
-export function normalizeDateString(raw: any, contextMonth?: number): string | null {
+export function normalizeDateString(
+  raw: any,
+  contextMonth?: number,
+  contextYear: number = 2026
+): string | null {
   if (raw === null || raw === undefined) return null;
   const str = String(raw).trim();
   if (!str) return null;
+  const curYear = contextYear || 2026;
 
   // 1. Google Visualization API Date constructor format: Date(YYYY, M, D) or Date(YYYY, M, D, H, M, S)
   // Note: in GViz, Month is 0-indexed (0 = Jan, 9 = Oct)
@@ -2555,7 +2813,6 @@ export function normalizeDateString(raw: any, contextMonth?: number): string | n
 
   const korNoYearMatch = str.match(/^(\d{1,2})월\s*(\d{1,2})일?/);
   if (korNoYearMatch) {
-    const curYear = 2026;
     const m = korNoYearMatch[1].padStart(2, '0');
     const d = korNoYearMatch[2].padStart(2, '0');
     return `${curYear}-${m}-${d}`;
@@ -2579,10 +2836,9 @@ export function normalizeDateString(raw: any, contextMonth?: number): string | n
     return `${y}-${m}-${d}`;
   }
 
-  // 6. Matches MM/DD or MM.DD or M.D (assumes 2026): "1. 5", "1/5", "01.05", "1-5"
+  // 6. Matches MM/DD or MM.DD or M.D (uses contextYear): "1. 5", "1/5", "01.05", "1-5"
   const mdMatch = str.match(/^(\d{1,2})\s*[\.\-\/]\s*(\d{1,2})\.?$/);
   if (mdMatch) {
-    const curYear = 2026;
     const m = mdMatch[1].padStart(2, '0');
     const d = mdMatch[2].padStart(2, '0');
     const mNum = parseInt(m, 10);
@@ -2598,7 +2854,6 @@ export function normalizeDateString(raw: any, contextMonth?: number): string | n
     if (dayMatch) {
       const dNum = parseInt(dayMatch[1], 10);
       if (dNum >= 1 && dNum <= 31) {
-        const curYear = 2026;
         const m = String(contextMonth).padStart(2, '0');
         const d = String(dNum).padStart(2, '0');
         return `${curYear}-${m}-${d}`;
@@ -2615,3 +2870,1172 @@ export function normalizeDateString(raw: any, contextMonth?: number): string | n
 
   return null;
 }
+
+/**
+ * Convert Transaction array into standardized 9-column sheet rows (preserving installment tags, fixed/special flags, sub-items, pure memo)
+ */
+export function transactionsToStandardSheetRows(transactions: Transaction[]): any[][] {
+  const sorted = [...transactions].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  return [
+    STANDARD_9_HEADERS,
+    ...sorted.map((t) => [
+      t.date || '',
+      t.type === 'income' ? '수입' : t.type === 'transfer' ? '이체' : '지출',
+      t.category || '',
+      t.description || '',
+      Number(t.amount) || 0,
+      t.paymentMethod || '',
+      t.isRecurring ? '정' : t.isSpecial ? '특' : '',
+      formatSubItemsForColumn(t.subItems),
+      stripTagsFromMemo(t.memo),
+    ]),
+  ];
+}
+
+/**
+ * Deduplicate transactions using exact signature (date + type + amount + description + category + paymentMethod)
+ * while still allowing legitimate identical same-day purchases when already inside the same tab by tracking occurrence count per source.
+ */
+function deduplicateTransactionsClean(txs: Transaction[]): Transaction[] {
+  const seen = new Map<string, number>();
+  const result: Transaction[] = [];
+  for (const tx of txs) {
+    const baseKey = `${tx.date}|${tx.type}|${tx.amount}|${(tx.description || '').trim()}|${(tx.category || '').trim()}|${(tx.paymentMethod || '').trim()}`;
+    const count = (seen.get(baseKey) || 0) + 1;
+    seen.set(baseKey, count);
+    result.push(tx);
+  }
+  return result;
+}
+
+/**
+ * Merge base transactions with incoming transactions, skipping items whose exact signature already exists in target tab.
+ */
+function mergeTransactionsWithoutDuplicates(
+  existingInTarget: Transaction[],
+  incoming: Transaction[]
+): { merged: Transaction[]; addedCount: number; skippedDuplicates: number } {
+  const existingCount = new Map<string, number>();
+  const makeSig = (t: Transaction) =>
+    `${t.date}|${t.type}|${Number(t.amount) || 0}|${(t.description || '').trim()}|${(t.category || '').trim()}`;
+
+  existingInTarget.forEach((t) => {
+    const sig = makeSig(t);
+    existingCount.set(sig, (existingCount.get(sig) || 0) + 1);
+  });
+
+  const incomingSeen = new Map<string, number>();
+  const toAdd: Transaction[] = [];
+  let skippedDuplicates = 0;
+
+  incoming.forEach((t) => {
+    const sig = makeSig(t);
+    const curIdx = (incomingSeen.get(sig) || 0) + 1;
+    incomingSeen.set(sig, curIdx);
+    const alreadyHave = existingCount.get(sig) || 0;
+    if (curIdx <= alreadyHave) {
+      skippedDuplicates++;
+    } else {
+      toAdd.push(t);
+    }
+  });
+
+  return {
+    merged: [...existingInTarget, ...toAdd],
+    addedCount: toAdd.length,
+    skippedDuplicates,
+  };
+}
+
+/**
+ * Ensure target sheet tab exists, has enough grid rows, clear old contents, and write all rows in safe batches.
+ */
+async function writeStandardRowsToTargetTab(
+  spreadsheetId: string,
+  targetTabTitle: string,
+  rowsData: any[][],
+  accessToken: string
+): Promise<{ tabCreated: boolean }> {
+  const meta = await getSpreadsheetDetails(spreadsheetId, accessToken);
+  let targetSheet = meta.sheets.find((s) => s.title.trim() === targetTabTitle.trim());
+  let tabCreated = false;
+
+  const requiredRows = Math.max(1000, rowsData.length + 250);
+
+  if (!targetSheet) {
+    await addMonthlySheetTab(
+      spreadsheetId,
+      targetTabTitle,
+      STANDARD_9_HEADERS,
+      accessToken,
+      requiredRows
+    );
+    tabCreated = true;
+    const updatedMeta = await getSpreadsheetDetails(spreadsheetId, accessToken);
+    targetSheet = updatedMeta.sheets.find((s) => s.title.trim() === targetTabTitle.trim());
+  } else {
+    // Check current grid rowCount and expand if needed before bulk write
+    try {
+      const sheetPropRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties(sheetId,title,gridProperties)`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      if (sheetPropRes.ok) {
+        const propJson = await sheetPropRes.json();
+        const foundProp = (propJson.sheets || []).find(
+          (s: any) => s.properties?.sheetId === targetSheet!.id
+        );
+        const curRowCount = foundProp?.properties?.gridProperties?.rowCount || 1000;
+        if (curRowCount < rowsData.length + 100) {
+          await fetch(
+            `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,
+            {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                requests: [
+                  {
+                    appendDimension: {
+                      sheetId: targetSheet.id,
+                      dimension: 'ROWS',
+                      length: rowsData.length + 300 - curRowCount,
+                    },
+                  },
+                ],
+              }),
+            }
+          );
+        }
+      }
+    } catch (gridErr) {
+      console.warn('Grid check/expand warning:', gridErr);
+    }
+
+    // Clear existing contents
+    const clearRange = encodeURIComponent(`'${targetTabTitle}'!A1:Z10000`);
+    try {
+      await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${clearRange}:clear`,
+        {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+    } catch (clearErr) {
+      console.warn('Target clear warning:', clearErr);
+    }
+  }
+
+  // Write rows in safe chunks (up to 2000 rows per PUT call to prevent payload timeouts)
+  const CHUNK_SIZE = 2000;
+  const endCol = getColumnLetter(STANDARD_9_HEADERS.length - 1);
+  for (let offset = 0; offset < rowsData.length; offset += CHUNK_SIZE) {
+    const chunk = rowsData.slice(offset, offset + CHUNK_SIZE);
+    const startRow = offset + 1;
+    const endRow = offset + chunk.length;
+    const writeRange = encodeURIComponent(`'${targetTabTitle}'!A${startRow}:${endCol}${endRow}`);
+    const writeRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${writeRange}?valueInputOption=USER_ENTERED`,
+      {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ values: chunk }),
+      }
+    );
+
+    if (writeRes.status === 401) {
+      throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 만료되었습니다. 상단 [Google 로그인]을 눌러 재인증해 주세요.');
+    }
+    if (!writeRes.ok) {
+      const errJson = await writeRes.json().catch(() => null);
+      throw new Error(errJson?.error?.message || `'${targetTabTitle}' 시트 쓰기 실패 (${startRow}~${endRow}행)`);
+    }
+  }
+
+  return { tabCreated };
+}
+
+export const PERPETUAL_SUMMARY_TAB_TITLE = '📊 연도별 요약';
+
+function escapeSheetTitleForFormula(title: string): string {
+  return title.replace(/'/g, "''");
+}
+
+/**
+ * Apply clean headers, frozen top row, currency number format, and column widths on a unified year tab.
+ */
+export async function formatYearSheetTab(
+  spreadsheetId: string,
+  sheetId: number,
+  accessToken: string
+): Promise<void> {
+  const widths = [105, 68, 120, 220, 115, 125, 82, 260, 220];
+  const requests: any[] = [
+    {
+      updateSheetProperties: {
+        properties: {
+          sheetId,
+          gridProperties: { frozenRowCount: 1 },
+        },
+        fields: 'gridProperties.frozenRowCount',
+      },
+    },
+    {
+      repeatCell: {
+        range: { sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 9 },
+        cell: {
+          userEnteredFormat: {
+            backgroundColor: { red: 0.118, green: 0.161, blue: 0.231 },
+            horizontalAlignment: 'CENTER',
+            verticalAlignment: 'MIDDLE',
+            textFormat: {
+              foregroundColor: { red: 1, green: 1, blue: 1 },
+              bold: true,
+              fontSize: 10,
+            },
+          },
+        },
+        fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment,verticalAlignment)',
+      },
+    },
+    {
+      repeatCell: {
+        range: { sheetId, startRowIndex: 1, startColumnIndex: 4, endColumnIndex: 5 },
+        cell: {
+          userEnteredFormat: {
+            numberFormat: { type: 'NUMBER', pattern: '#,##0' },
+          },
+        },
+        fields: 'userEnteredFormat.numberFormat',
+      },
+    },
+    ...widths.map((pixelSize, idx) => ({
+      updateDimensionProperties: {
+        range: { sheetId, dimension: 'COLUMNS', startIndex: idx, endIndex: idx + 1 },
+        properties: { pixelSize },
+        fields: 'pixelSize',
+      },
+    })),
+  ];
+
+  try {
+    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ requests }),
+    });
+  } catch (err) {
+    console.warn('formatYearSheetTab warning:', err);
+  }
+}
+
+/**
+ * Build live SUMIF/SUMIFS formula rows for the in-sheet [📊 연도별 요약] perpetual dashboard tab.
+ */
+export function buildPerpetualSummarySheetRows(
+  yearTabs: Array<{ year: number; title: string }>
+): any[][] {
+  const sortedYears = [...yearTabs].sort((a, b) => b.year - a.year);
+  const rows: any[][] = [];
+
+  rows.push(['📊 스마트 만년 가계부 — 연도별 종합 요약', '', '', '', '', '', '', '']);
+  rows.push([
+    '※ 각 연도 탭([2026], [2025] 등)에 내역이 추가/수정되면 아래 연도별·월별 통계가 실시간 자동 계산됩니다.',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+    '',
+  ]);
+  rows.push([
+    '연도',
+    '연도 탭',
+    '총 수입',
+    '총 지출',
+    '순수지 (수입-지출)',
+    '고정지출 (정)',
+    '특별지출 (특)',
+    '거래 건수',
+  ]);
+
+  const yearStartRow = 4; // 1-based row number in Google Sheets
+  sortedYears.forEach((yt, idx) => {
+    const r = yearStartRow + idx;
+    const ref = `'${escapeSheetTitleForFormula(yt.title)}'`;
+    rows.push([
+      `${yt.year}년`,
+      yt.title,
+      `=SUMIF(${ref}!B:B,"수입",${ref}!E:E)`,
+      `=SUMIF(${ref}!B:B,"지출",${ref}!E:E)`,
+      `=C${r}-D${r}`,
+      `=SUMIFS(${ref}!E:E,${ref}!B:B,"지출",${ref}!G:G,"정")`,
+      `=SUMIFS(${ref}!E:E,${ref}!B:B,"지출",${ref}!G:G,"특")`,
+      `=MAX(0,COUNTA(${ref}!A:A)-1)`,
+    ]);
+  });
+
+  if (sortedYears.length > 0) {
+    const endRow = yearStartRow + sortedYears.length - 1;
+    rows.push([
+      '전체 누적 합계',
+      `${sortedYears.length}개 연도`,
+      `=SUM(C${yearStartRow}:C${endRow})`,
+      `=SUM(D${yearStartRow}:D${endRow})`,
+      `=SUM(E${yearStartRow}:E${endRow})`,
+      `=SUM(F${yearStartRow}:F${endRow})`,
+      `=SUM(G${yearStartRow}:G${endRow})`,
+      `=SUM(H${yearStartRow}:H${endRow})`,
+    ]);
+  }
+
+  rows.push([]);
+  rows.push(['📅 연도별 월간 수입 / 지출 추이 (1월 ~ 12월 비교)']);
+
+  // Monthly breakdown across all detected years
+  const monthlyHeader: string[] = ['월'];
+  sortedYears.forEach((yt) => {
+    monthlyHeader.push(`${yt.year}년 수입`, `${yt.year}년 지출`, `${yt.year}년 순수지`);
+  });
+  rows.push(monthlyHeader);
+
+  const monthlyDataStartRow = rows.length + 1;
+  for (let m = 1; m <= 12; m++) {
+    const rowNum = monthlyDataStartRow + (m - 1);
+    const row: any[] = [`${m}월`];
+    sortedYears.forEach((yt, yIdx) => {
+      const ref = `'${escapeSheetTitleForFormula(yt.title)}'`;
+      const incColLetter = getColumnLetter(1 + yIdx * 3);
+      const expColLetter = getColumnLetter(2 + yIdx * 3);
+      row.push(
+        `=SUMIFS(${ref}!E:E,${ref}!B:B,"수입",${ref}!A:A,">="&DATE(${yt.year},${m},1),${ref}!A:A,"<="&EOMONTH(DATE(${yt.year},${m},1),0))`,
+        `=SUMIFS(${ref}!E:E,${ref}!B:B,"지출",${ref}!A:A,">="&DATE(${yt.year},${m},1),${ref}!A:A,"<="&EOMONTH(DATE(${yt.year},${m},1),0))`,
+        `=${incColLetter}${rowNum}-${expColLetter}${rowNum}`
+      );
+    });
+    rows.push(row);
+  }
+
+  if (sortedYears.length > 0) {
+    const monthlyEndRow = monthlyDataStartRow + 11;
+    const totalRow: any[] = ['연간 합계'];
+    sortedYears.forEach((_, yIdx) => {
+      const incCol = getColumnLetter(1 + yIdx * 3);
+      const expCol = getColumnLetter(2 + yIdx * 3);
+      const netCol = getColumnLetter(3 + yIdx * 3);
+      totalRow.push(
+        `=SUM(${incCol}${monthlyDataStartRow}:${incCol}${monthlyEndRow})`,
+        `=SUM(${expCol}${monthlyDataStartRow}:${expCol}${monthlyEndRow})`,
+        `=SUM(${netCol}${monthlyDataStartRow}:${netCol}${monthlyEndRow})`
+      );
+    });
+    rows.push(totalRow);
+  }
+
+  return rows;
+}
+
+/**
+ * Create or update the [📊 연도별 요약] perpetual summary tab in Google Sheets with live SUMIF/SUMIFS formulas.
+ */
+export async function syncPerpetualSummaryTabInGoogleSheet(
+  spreadsheetId: string,
+  accessToken: string
+): Promise<{ sheetId: number; title: string; yearCount: number }> {
+  const meta = await getSpreadsheetDetails(spreadsheetId, accessToken);
+  const yearTabs = findAllYearTabs(meta.sheets || []);
+
+  let summarySheet = (meta.sheets || []).find(
+    (s) =>
+      s.title.trim() === PERPETUAL_SUMMARY_TAB_TITLE ||
+      /연도별\s*요약|연도\s*요약/i.test(s.title)
+  );
+
+  const summaryTitle = summarySheet ? summarySheet.title : PERPETUAL_SUMMARY_TAB_TITLE;
+  let summarySheetId = summarySheet?.id;
+
+  if (!summarySheet) {
+    const addRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          requests: [
+            {
+              addSheet: {
+                properties: {
+                  title: summaryTitle,
+                  index: 0,
+                  gridProperties: {
+                    rowCount: 80,
+                    columnCount: Math.max(12, 2 + yearTabs.length * 3),
+                    frozenRowCount: 3,
+                  },
+                },
+              },
+            },
+          ],
+        }),
+      }
+    );
+    if (addRes.ok) {
+      const addJson = await addRes.json();
+      summarySheetId = addJson.replies?.[0]?.addSheet?.properties?.sheetId;
+    }
+  }
+
+  const rowsData = buildPerpetualSummarySheetRows(yearTabs);
+
+  // Clear old content on summary sheet
+  const clearRange = encodeURIComponent(`'${summaryTitle}'!A1:Z120`);
+  try {
+    await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${clearRange}:clear`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+  } catch (e) {
+    console.warn('Summary clear warning:', e);
+  }
+
+  const maxCols = rowsData.reduce((mx, r) => Math.max(mx, r.length), 8);
+  const endCol = getColumnLetter(Math.max(7, maxCols - 1));
+  const writeRange = encodeURIComponent(`'${summaryTitle}'!A1:${endCol}${rowsData.length}`);
+  const writeRes = await fetch(
+    `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${writeRange}?valueInputOption=USER_ENTERED`,
+    {
+      method: 'PUT',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ values: rowsData }),
+    }
+  );
+
+  if (!writeRes.ok) {
+    const errJson = await writeRes.json().catch(() => null);
+    throw new Error(errJson?.error?.message || `'${summaryTitle}' 요약 시트 작성 실패`);
+  }
+
+  if (summarySheetId !== undefined) {
+    const monthlyHeaderRowIdx = 3 + yearTabs.length + (yearTabs.length > 0 ? 1 : 0) + 2; // 0-based index
+    const fmtRequests: any[] = [
+      {
+        updateSheetProperties: {
+          properties: {
+            sheetId: summarySheetId,
+            hidden: false,
+            gridProperties: { frozenRowCount: 3 },
+          },
+          fields: 'hidden,gridProperties.frozenRowCount',
+        },
+      },
+      // Title row styling
+      {
+        repeatCell: {
+          range: { sheetId: summarySheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 8 },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: { red: 0.192, green: 0.18, blue: 0.506 },
+              textFormat: { foregroundColor: { red: 1, green: 1, blue: 1 }, bold: true, fontSize: 13 },
+            },
+          },
+          fields: 'userEnteredFormat(backgroundColor,textFormat)',
+        },
+      },
+      // Year summary table header (Row 3, index 2)
+      {
+        repeatCell: {
+          range: { sheetId: summarySheetId, startRowIndex: 2, endRowIndex: 3, startColumnIndex: 0, endColumnIndex: 8 },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: { red: 0.118, green: 0.161, blue: 0.231 },
+              horizontalAlignment: 'CENTER',
+              textFormat: { foregroundColor: { red: 1, green: 1, blue: 1 }, bold: true, fontSize: 10 },
+            },
+          },
+          fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+        },
+      },
+      // Currency number format across numeric summary cells
+      {
+        repeatCell: {
+          range: {
+            sheetId: summarySheetId,
+            startRowIndex: 3,
+            endRowIndex: rowsData.length,
+            startColumnIndex: 1,
+            endColumnIndex: Math.max(8, maxCols),
+          },
+          cell: {
+            userEnteredFormat: {
+              numberFormat: { type: 'NUMBER', pattern: '#,##0' },
+            },
+          },
+          fields: 'userEnteredFormat.numberFormat',
+        },
+      },
+      // Monthly table header styling
+      {
+        repeatCell: {
+          range: {
+            sheetId: summarySheetId,
+            startRowIndex: monthlyHeaderRowIdx,
+            endRowIndex: monthlyHeaderRowIdx + 1,
+            startColumnIndex: 0,
+            endColumnIndex: Math.max(4, 1 + yearTabs.length * 3),
+          },
+          cell: {
+            userEnteredFormat: {
+              backgroundColor: { red: 0.118, green: 0.161, blue: 0.231 },
+              horizontalAlignment: 'CENTER',
+              textFormat: { foregroundColor: { red: 1, green: 1, blue: 1 }, bold: true, fontSize: 10 },
+            },
+          },
+          fields: 'userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)',
+        },
+      },
+      {
+        updateDimensionProperties: {
+          range: { sheetId: summarySheetId, dimension: 'COLUMNS', startIndex: 0, endIndex: 1 },
+          properties: { pixelSize: 120 },
+          fields: 'pixelSize',
+        },
+      },
+      {
+        updateDimensionProperties: {
+          range: { sheetId: summarySheetId, dimension: 'COLUMNS', startIndex: 1, endIndex: Math.max(8, maxCols) },
+          properties: { pixelSize: 135 },
+          fields: 'pixelSize',
+        },
+      },
+    ];
+
+    try {
+      await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ requests: fmtRequests }),
+      });
+    } catch (fmtErr) {
+      console.warn('Summary formatting warning:', fmtErr);
+    }
+  }
+
+  return {
+    sheetId: summarySheetId || 0,
+    title: summaryTitle,
+    yearCount: yearTabs.length,
+  };
+}
+
+export type OldMonthTabsAction = 'hide' | 'keep' | 'delete';
+
+/**
+ * Rename spreadsheet (optional), hide/delete/keep legacy 1월~12월 tabs, and cleanly order visible perpetual tabs.
+ */
+export async function organizePerpetualSheetStructure(params: {
+  spreadsheetId: string;
+  accessToken: string;
+  newSpreadsheetTitle?: string;
+  oldMonthTabsAction?: OldMonthTabsAction;
+}): Promise<{
+  renamedTitle?: string;
+  handledMonthTabsCount: number;
+  oldMonthTabsAction: OldMonthTabsAction;
+}> {
+  const {
+    spreadsheetId,
+    accessToken,
+    newSpreadsheetTitle,
+    oldMonthTabsAction = 'hide',
+  } = params;
+
+  const meta = await getSpreadsheetDetails(spreadsheetId, accessToken);
+  const allSheets = meta.sheets || [];
+  const requests: any[] = [];
+  let renamedTitle: string | undefined;
+
+  if (newSpreadsheetTitle && newSpreadsheetTitle.trim() && newSpreadsheetTitle.trim() !== meta.title) {
+    const trimmedTitle = newSpreadsheetTitle.trim();
+    requests.push({
+      updateSpreadsheetProperties: {
+        properties: { title: trimmedTitle },
+        fields: 'title',
+      },
+    });
+    renamedTitle = trimmedTitle;
+  }
+
+  const monthTabs = allSheets.filter((s) => extractMonthNumberFromTab(s.title) !== null);
+  const nonMonthTabs = allSheets.filter((s) => extractMonthNumberFromTab(s.title) === null);
+  let handledMonthTabsCount = 0;
+
+  if (oldMonthTabsAction === 'hide' && monthTabs.length > 0 && nonMonthTabs.length > 0) {
+    monthTabs.forEach((mTab) => {
+      if (!mTab.hidden) {
+        requests.push({
+          updateSheetProperties: {
+            properties: { sheetId: mTab.id, hidden: true },
+            fields: 'hidden',
+          },
+        });
+      }
+      handledMonthTabsCount++;
+    });
+  } else if (oldMonthTabsAction === 'delete' && monthTabs.length > 0 && nonMonthTabs.length > 0) {
+    monthTabs.forEach((mTab) => {
+      requests.push({ deleteSheet: { sheetId: mTab.id } });
+      handledMonthTabsCount++;
+    });
+  } else {
+    handledMonthTabsCount = monthTabs.length;
+  }
+
+  // Reorder visible tabs: [📊 연도별 요약] -> [Year Tabs desc] -> [⚙️ 분류설정] -> [📖 사용설명서] -> others
+  const remainingTabs =
+    oldMonthTabsAction === 'delete' && nonMonthTabs.length > 0 ? nonMonthTabs : allSheets;
+
+  const summaryTab = remainingTabs.find(
+    (s) => s.title.trim() === PERPETUAL_SUMMARY_TAB_TITLE || /연도별\s*요약|연도\s*요약/i.test(s.title)
+  );
+  const yearTabs = findAllYearTabs(remainingTabs); // sorted desc by year
+  const settingsTab = remainingTabs.find((s) => /분류설정/i.test(s.title));
+  const manualTab = remainingTabs.find((s) => /사용설명서/i.test(s.title));
+
+  const orderedIds: number[] = [];
+  if (summaryTab) orderedIds.push(summaryTab.id);
+  yearTabs.forEach((yt) => {
+    if (!orderedIds.includes(yt.id)) orderedIds.push(yt.id);
+  });
+  if (settingsTab && !orderedIds.includes(settingsTab.id)) orderedIds.push(settingsTab.id);
+  if (manualTab && !orderedIds.includes(manualTab.id)) orderedIds.push(manualTab.id);
+  remainingTabs.forEach((s) => {
+    if (!orderedIds.includes(s.id)) orderedIds.push(s.id);
+  });
+
+  orderedIds.forEach((sheetId, index) => {
+    requests.push({
+      updateSheetProperties: {
+        properties: { sheetId, index },
+        fields: 'index',
+      },
+    });
+  });
+
+  if (requests.length > 0) {
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ requests }),
+      }
+    );
+    if (res.status === 401) {
+      throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 만료되었습니다. 상단 [Google 로그인]을 눌러 재인증해 주세요.');
+    }
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => null);
+      throw new Error(errJson?.error?.message || '구글 시트 구조/제목 정리 중 오류가 발생했습니다.');
+    }
+  }
+
+  return {
+    renamedTitle,
+    handledMonthTabsCount,
+    oldMonthTabsAction,
+  };
+}
+
+export interface ConsolidationMonthLog {
+  sourceTab: string;
+  count: number;
+  status: 'read' | 'empty' | 'skipped' | 'error';
+  error?: string;
+}
+
+export interface ConsolidationResult {
+  targetTabTitle: string;
+  totalRowsWritten: number;
+  newlyAddedCount: number;
+  skippedDuplicates: number;
+  monthLogs: ConsolidationMonthLog[];
+  renamedTitle?: string;
+  summaryTabCreated?: boolean;
+  oldMonthTabsAction?: OldMonthTabsAction;
+  handledMonthTabsCount?: number;
+}
+
+/**
+ * Consolidate all monthly tabs (1월~12월) in the current spreadsheet into one unified year tab (e.g. "2026"),
+ * format the year tab, generate/refresh [📊 연도별 요약], optionally rename the file to "스마트 만년 가계부",
+ * and safely hide/keep/delete legacy 1월~12월 tabs.
+ */
+export async function consolidateMonthsIntoYearTab(params: {
+  spreadsheetId: string;
+  targetYear: number;
+  targetTabTitle?: string;
+  mergeWithExistingTarget?: boolean;
+  newSpreadsheetTitle?: string;
+  oldMonthTabsAction?: OldMonthTabsAction;
+  createSummaryTab?: boolean;
+  accessToken: string;
+  onProgress?: (info: { index: number; total: number; message: string }) => void;
+}): Promise<ConsolidationResult> {
+  const {
+    spreadsheetId,
+    targetYear,
+    targetTabTitle = String(targetYear),
+    mergeWithExistingTarget = true,
+    newSpreadsheetTitle,
+    oldMonthTabsAction = 'hide',
+    createSummaryTab = true,
+    accessToken,
+    onProgress,
+  } = params;
+
+  if (!accessToken) {
+    throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 필요합니다. 상단 [Google 로그인]을 눌러주세요.');
+  }
+
+  const meta = await getSpreadsheetDetails(spreadsheetId, accessToken);
+  const tabs = meta.sheets || [];
+
+  const monthLogs: ConsolidationMonthLog[] = [];
+  const collected: Transaction[] = [];
+  const totalSteps = 16;
+
+  for (let m = 1; m <= 12; m++) {
+    const matchedTab = findTabForMonth(tabs, m);
+    const label = matchedTab ? matchedTab.title : `${m}월`;
+
+    onProgress?.({
+      index: m,
+      total: totalSteps,
+      message: `[${label}] 탭 내역 읽는 중... (${m}/12)`,
+    });
+
+    if (!matchedTab) {
+      monthLogs.push({ sourceTab: label, count: 0, status: 'skipped' });
+      continue;
+    }
+
+    try {
+      const rows = await getSheetValues(spreadsheetId, matchedTab.title, accessToken, 'A:Z');
+      if (!rows || rows.length <= 1) {
+        monthLogs.push({ sourceTab: matchedTab.title, count: 0, status: 'empty' });
+        continue;
+      }
+
+      const parsed = analyzeSheetStructure(
+        spreadsheetId,
+        `${targetYear}년 가계부`,
+        tabs,
+        matchedTab.title,
+        rows
+      );
+
+      // Ensure date starts with targetYear if parsed with another default year
+      const normalized = parsed.transactions.map((tx) => {
+        if (tx.date && /^\d{4}-\d{2}-\d{2}$/.test(tx.date)) {
+          const y = parseInt(tx.date.slice(0, 4), 10);
+          if (y === 2026 && targetYear !== 2026) {
+            return { ...tx, date: `${targetYear}${tx.date.slice(4)}` };
+          }
+        }
+        return tx;
+      });
+
+      if (normalized.length === 0) {
+        monthLogs.push({ sourceTab: matchedTab.title, count: 0, status: 'empty' });
+      } else {
+        collected.push(...normalized);
+        monthLogs.push({ sourceTab: matchedTab.title, count: normalized.length, status: 'read' });
+      }
+    } catch (err: any) {
+      if (isAuthExpiredError(err) || err?.message?.includes('AUTH_EXPIRED')) throw err;
+      monthLogs.push({
+        sourceTab: matchedTab.title,
+        count: 0,
+        status: 'error',
+        error: err?.message || String(err),
+      });
+    }
+  }
+
+  onProgress?.({
+    index: 13,
+    total: totalSteps,
+    message: `기존 [${targetTabTitle}] 탭 확인 및 중복 정리 중...`,
+  });
+
+  let existingInTarget: Transaction[] = [];
+  const existingTargetTab = tabs.find((t) => t.title.trim() === targetTabTitle.trim());
+  if (mergeWithExistingTarget && existingTargetTab) {
+    try {
+      const targetRows = await getSheetValues(spreadsheetId, existingTargetTab.title, accessToken, 'A:Z');
+      if (targetRows && targetRows.length > 1) {
+        const parsedTarget = analyzeSheetStructure(
+          spreadsheetId,
+          `${targetYear}년 가계부`,
+          tabs,
+          existingTargetTab.title,
+          targetRows
+        );
+        existingInTarget = parsedTarget.transactions;
+      }
+    } catch (err) {
+      console.warn('Could not read existing target year tab:', err);
+    }
+  }
+
+  const { merged, addedCount, skippedDuplicates } = mergeTransactionsWithoutDuplicates(
+    existingInTarget,
+    deduplicateTransactionsClean(collected)
+  );
+
+  onProgress?.({
+    index: 14,
+    total: totalSteps,
+    message: `[${targetTabTitle}] 통합 탭에 총 ${merged.length}건 저장 및 서식 적용 중...`,
+  });
+
+  const rowsData = transactionsToStandardSheetRows(merged);
+  await writeStandardRowsToTargetTab(spreadsheetId, targetTabTitle, rowsData, accessToken);
+
+  const postWriteMeta = await getSpreadsheetDetails(spreadsheetId, accessToken);
+  const writtenYearTab = postWriteMeta.sheets.find(
+    (s) => s.title.trim() === targetTabTitle.trim()
+  );
+  if (writtenYearTab) {
+    await formatYearSheetTab(spreadsheetId, writtenYearTab.id, accessToken);
+  }
+
+  let summaryTabCreated = false;
+  if (createSummaryTab) {
+    onProgress?.({
+      index: 15,
+      total: totalSteps,
+      message: `구글 시트 내 [${PERPETUAL_SUMMARY_TAB_TITLE}] 수식 탭 생성/갱신 중...`,
+    });
+    await syncPerpetualSummaryTabInGoogleSheet(spreadsheetId, accessToken);
+    summaryTabCreated = true;
+  }
+
+  onProgress?.({
+    index: 16,
+    total: totalSteps,
+    message: `파일 제목 및 시트 탭 순서 최종 정리 중...`,
+  });
+
+  const organized = await organizePerpetualSheetStructure({
+    spreadsheetId,
+    accessToken,
+    newSpreadsheetTitle,
+    oldMonthTabsAction,
+  });
+
+  setStoredLayoutMode(spreadsheetId, 'yearly');
+
+  return {
+    targetTabTitle,
+    totalRowsWritten: merged.length,
+    newlyAddedCount: addedCount,
+    skippedDuplicates,
+    monthLogs,
+    renamedTitle: organized.renamedTitle,
+    summaryTabCreated,
+    oldMonthTabsAction: organized.oldMonthTabsAction,
+    handledMonthTabsCount: organized.handledMonthTabsCount,
+  };
+}
+
+export interface ImportExternalYearResult {
+  sourceSpreadsheetTitle: string;
+  targetTabTitle: string;
+  totalRowsWritten: number;
+  newlyAddedCount: number;
+  skippedDuplicates: number;
+  sourceTabLogs: ConsolidationMonthLog[];
+}
+
+/**
+ * Import an external year's spreadsheet (e.g. "2025 가계부") into a unified year tab (e.g. "2025")
+ * inside the current master spreadsheet. Supports both 1월~12월 source files and single-tab files!
+ */
+export async function importExternalSpreadsheetToYearTab(params: {
+  targetSpreadsheetId: string;
+  sourceSpreadsheetId: string;
+  targetYear: number;
+  targetTabTitle?: string;
+  mergeWithExisting?: boolean;
+  accessToken: string;
+  onProgress?: (info: { index: number; total: number; message: string }) => void;
+}): Promise<ImportExternalYearResult> {
+  const {
+    targetSpreadsheetId,
+    sourceSpreadsheetId,
+    targetYear,
+    targetTabTitle = String(targetYear),
+    mergeWithExisting = true,
+    accessToken,
+    onProgress,
+  } = params;
+
+  if (!accessToken) {
+    throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 필요합니다. 상단 [Google 로그인]을 눌러주세요.');
+  }
+
+  onProgress?.({
+    index: 1,
+    total: 10,
+    message: `원본 스프레드시트 정보를 불러오는 중...`,
+  });
+
+  const sourceMeta = await getSpreadsheetDetails(sourceSpreadsheetId, accessToken);
+  const sourceTabs = sourceMeta.sheets || [];
+
+  // Identify candidate data tabs in source spreadsheet
+  const monthTabs = sourceTabs.filter((t) => extractMonthNumberFromTab(t.title) !== null);
+  const matchingYearTab = findTabForYear(sourceTabs, targetYear);
+  const txNamedTabs = sourceTabs.filter(
+    (t) =>
+      !/dashboard|대시보드|요약|matrix|연간|분류설정|설정|사용설명서|설명서/i.test(t.title) &&
+      !monthTabs.some((m) => m.id === t.id)
+  );
+
+  let tabsToRead: Array<{ id: number; title: string }> = [];
+  if (monthTabs.length > 0) {
+    // Sort 1월..12월
+    tabsToRead = [...monthTabs].sort(
+      (a, b) => (extractMonthNumberFromTab(a.title) || 99) - (extractMonthNumberFromTab(b.title) || 99)
+    );
+    // Also include any year-named tab if it has additional data not in months? Usually either/or, prefer monthTabs.
+  } else if (matchingYearTab) {
+    tabsToRead = [matchingYearTab];
+  } else if (txNamedTabs.length > 0) {
+    tabsToRead = txNamedTabs;
+  } else {
+    tabsToRead = sourceTabs;
+  }
+
+  const totalSteps = tabsToRead.length + 2;
+  const sourceTabLogs: ConsolidationMonthLog[] = [];
+  const collected: Transaction[] = [];
+
+  for (let i = 0; i < tabsToRead.length; i++) {
+    const tab = tabsToRead[i];
+    onProgress?.({
+      index: i + 1,
+      total: totalSteps,
+      message: `원본 [${tab.title}] 탭 읽는 중... (${i + 1}/${tabsToRead.length})`,
+    });
+
+    try {
+      const rows = await getSheetValues(sourceSpreadsheetId, tab.title, accessToken, 'A:Z');
+      if (!rows || rows.length <= 1) {
+        sourceTabLogs.push({ sourceTab: tab.title, count: 0, status: 'empty' });
+        continue;
+      }
+
+      if (isAnnualMatrixSheet(rows, tab.title)) {
+        sourceTabLogs.push({ sourceTab: tab.title, count: 0, status: 'skipped' });
+        continue;
+      }
+
+      const parsed = analyzeSheetStructure(
+        sourceSpreadsheetId,
+        `${targetYear}년 가계부`,
+        sourceTabs,
+        tab.title,
+        rows
+      );
+
+      // Guarantee year matches targetYear when year wasn't explicitly different in row
+      const fixedTxs = parsed.transactions.map((tx) => {
+        if (tx.date && /^\d{4}-\d{2}-\d{2}$/.test(tx.date)) {
+          const y = parseInt(tx.date.slice(0, 4), 10);
+          if (y === 2026 && targetYear !== 2026) {
+            return { ...tx, date: `${targetYear}${tx.date.slice(4)}` };
+          }
+        }
+        return tx;
+      });
+
+      if (fixedTxs.length === 0) {
+        sourceTabLogs.push({ sourceTab: tab.title, count: 0, status: 'empty' });
+      } else {
+        collected.push(...fixedTxs);
+        sourceTabLogs.push({ sourceTab: tab.title, count: fixedTxs.length, status: 'read' });
+      }
+    } catch (err: any) {
+      if (isAuthExpiredError(err) || err?.message?.includes('AUTH_EXPIRED')) throw err;
+      sourceTabLogs.push({
+        sourceTab: tab.title,
+        count: 0,
+        status: 'error',
+        error: err?.message || String(err),
+      });
+    }
+  }
+
+  onProgress?.({
+    index: totalSteps - 1,
+    total: totalSteps,
+    message: `현재 파일의 [${targetTabTitle}] 탭 병합 및 정리 중...`,
+  });
+
+  let existingInTarget: Transaction[] = [];
+  if (mergeWithExisting) {
+    const targetMeta = await getSpreadsheetDetails(targetSpreadsheetId, accessToken);
+    const existingTab = targetMeta.sheets.find((t) => t.title.trim() === targetTabTitle.trim());
+    if (existingTab) {
+      try {
+        const targetRows = await getSheetValues(targetSpreadsheetId, existingTab.title, accessToken, 'A:Z');
+        if (targetRows && targetRows.length > 1) {
+          const parsedTarget = analyzeSheetStructure(
+            targetSpreadsheetId,
+            `${targetYear}년 가계부`,
+            targetMeta.sheets,
+            existingTab.title,
+            targetRows
+          );
+          existingInTarget = parsedTarget.transactions;
+        }
+      } catch (err) {
+        console.warn('Existing target read warning:', err);
+      }
+    }
+  }
+
+  const { merged, addedCount, skippedDuplicates } = mergeTransactionsWithoutDuplicates(
+    existingInTarget,
+    deduplicateTransactionsClean(collected)
+  );
+
+  onProgress?.({
+    index: totalSteps,
+    total: totalSteps,
+    message: `마스터 시트의 [${targetTabTitle}] 탭에 ${merged.length}건 저장 중...`,
+  });
+
+  const rowsData = transactionsToStandardSheetRows(merged);
+  await writeStandardRowsToTargetTab(targetSpreadsheetId, targetTabTitle, rowsData, accessToken);
+
+  const postImportMeta = await getSpreadsheetDetails(targetSpreadsheetId, accessToken);
+  const importedTab = postImportMeta.sheets.find((s) => s.title.trim() === targetTabTitle.trim());
+  if (importedTab) {
+    await formatYearSheetTab(targetSpreadsheetId, importedTab.id, accessToken);
+  }
+  await syncPerpetualSummaryTabInGoogleSheet(targetSpreadsheetId, accessToken);
+  await organizePerpetualSheetStructure({
+    spreadsheetId: targetSpreadsheetId,
+    accessToken,
+    oldMonthTabsAction: 'keep',
+  });
+
+  setStoredLayoutMode(targetSpreadsheetId, 'yearly');
+
+  return {
+    sourceSpreadsheetTitle: sourceMeta.title,
+    targetTabTitle,
+    totalRowsWritten: merged.length,
+    newlyAddedCount: addedCount,
+    skippedDuplicates,
+    sourceTabLogs,
+  };
+}
+
+/**
+ * Fetch and parse all transactions from a single year tab (or all monthly tabs of an external year sheet)
+ */
+export async function fetchAllTransactionsForYearSource(params: {
+  spreadsheetId: string;
+  spreadsheetTitle?: string;
+  year: number;
+  yearTabTitle?: string;
+  accessToken?: string | null;
+}): Promise<Transaction[]> {
+  const { spreadsheetId, spreadsheetTitle, year, yearTabTitle, accessToken } = params;
+  if (yearTabTitle) {
+    const rows = await getSheetValues(spreadsheetId, yearTabTitle, accessToken, 'A:Z');
+    if (!rows || rows.length <= 1) return [];
+    const { transactions } = analyzeSheetStructure(
+      spreadsheetId,
+      spreadsheetTitle || `${year}년 가계부`,
+      [{ id: 1, title: yearTabTitle }],
+      yearTabTitle,
+      rows
+    );
+    return transactions;
+  }
+
+  // Fallback for external yearly spreadsheet that still uses 1월~12월 tabs
+  const meta = await getSpreadsheetDetails(spreadsheetId, accessToken);
+  const matchingYearTab = findTabForYear(meta.sheets, year);
+  if (matchingYearTab) {
+    const rows = await getSheetValues(spreadsheetId, matchingYearTab.title, accessToken, 'A:Z');
+    const { transactions } = analyzeSheetStructure(
+      spreadsheetId,
+      meta.title,
+      meta.sheets,
+      matchingYearTab.title,
+      rows
+    );
+    return transactions;
+  }
+
+  const monthTabs = meta.sheets
+    .filter((t) => extractMonthNumberFromTab(t.title) !== null)
+    .sort((a, b) => (extractMonthNumberFromTab(a.title) || 99) - (extractMonthNumberFromTab(b.title) || 99));
+
+  const allTxs: Transaction[] = [];
+  for (const tab of monthTabs) {
+    try {
+      const rows = await getSheetValues(spreadsheetId, tab.title, accessToken, 'A:Z');
+      if (!rows || rows.length <= 1) continue;
+      const { transactions } = analyzeSheetStructure(
+        spreadsheetId,
+        `${year}년 가계부`,
+        meta.sheets,
+        tab.title,
+        rows
+      );
+      allTxs.push(...transactions);
+    } catch {
+      // skip failing tab
+    }
+  }
+  return allTxs;
+}
+

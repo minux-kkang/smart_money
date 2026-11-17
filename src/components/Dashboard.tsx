@@ -67,6 +67,7 @@ import {
   deleteInstallmentPlan,
   InstallmentPlan,
 } from '../services/installmentStorage';
+import { extractYearFromTab } from '../services/googleSheets';
 
 interface DashboardProps {
   transactions: Transaction[];
@@ -107,6 +108,7 @@ interface DashboardProps {
   spreadsheetId?: string | null;
   onFetchMonthTransactions?: (monthNum: number) => Promise<Transaction[]>;
   yearData?: YearDashboardData;
+  isYearlyUnifiedMode?: boolean;
 }
 
 export function extractMonthFromDate(dateStr?: string, sheetTitle?: string): number | null {
@@ -191,6 +193,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   spreadsheetId,
   onFetchMonthTransactions,
   yearData,
+  isYearlyUnifiedMode = false,
 }) => {
   // Daily Pace Comparison Modal state (User request: 11월 총 지출 클릭 시 지난 달들과 일자별 지출 비교 그래프)
   const [isDailyPaceModalOpen, setIsDailyPaceModalOpen] = useState<boolean>(false);
@@ -233,8 +236,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
     if (!isInstallmentModalOpen) setConfirmDeletePlanId(null);
   }, [spreadsheetId, transactions, isInstallmentModalOpen]);
   const [excludeSpecialExpense, setExcludeSpecialExpense] = useState<boolean>(false);
-  // Default to current month (e.g. 10월, 11월)
+  const activeTabYear = useMemo(() => extractYearFromTab(activeSheetTitle), [activeSheetTitle]);
+  const isYearlyUnifiedTab = useMemo(
+    () => Boolean(activeTabYear !== null || (isYearlyUnifiedMode && !activeSheetTitle?.match(/(?:^|[^0-9])0*\d{1,2}월/))),
+    [activeTabYear, isYearlyUnifiedMode, activeSheetTitle]
+  );
+
+  // Default to current month (or 'all' when browsing a past year's unified tab)
   const [selectedMonthFilter, setSelectedMonthFilter] = useState<string>(() => {
+    const tabYear = extractYearFromTab(activeSheetTitle);
+    if (tabYear !== null) {
+      return tabYear === new Date().getFullYear()
+        ? String(new Date().getMonth() + 1)
+        : 'all';
+    }
     const match = activeSheetTitle?.trim().match(/(?:^|[^0-9])0*(\d{1,2})월/);
     if (match) return String(parseInt(match[1], 10));
     return String(new Date().getMonth() + 1);
@@ -268,19 +283,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const cur = getCurrentMonthNumber();
     const prev = cur > 1 ? cur - 1 : 12;
     setSelectedMonthFilter(String(prev));
-    if (onSelectSheetTab) onSelectSheetTab(`${prev}월`);
+    if (onSelectSheetTab && !isYearlyUnifiedTab) onSelectSheetTab(`${prev}월`);
   };
 
   const goToNextMonth = () => {
     const cur = getCurrentMonthNumber();
     const next = cur < 12 ? cur + 1 : 1;
     setSelectedMonthFilter(String(next));
-    if (onSelectSheetTab) onSelectSheetTab(`${next}월`);
+    if (onSelectSheetTab && !isYearlyUnifiedTab) onSelectSheetTab(`${next}월`);
   };
 
-  // Sync month filter when activeSheetTitle changes to a specific month
+  // Sync month filter when activeSheetTitle changes to a specific month or year tab
   React.useEffect(() => {
     if (!activeSheetTitle) return;
+    const tabYear = extractYearFromTab(activeSheetTitle);
+    if (tabYear !== null) {
+      setSelectedMonthFilter(
+        tabYear === new Date().getFullYear() ? String(new Date().getMonth() + 1) : 'all'
+      );
+      return;
+    }
     const match = activeSheetTitle.trim().match(/(?:^|[^0-9])0*(\d{1,2})월/);
     if (match) {
       const mNum = parseInt(match[1], 10);
@@ -523,6 +545,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
     setSubItemModalTx(null);
   };
 
+  // Scoped transactions for active month filter (critical for unified year tabs containing 1~12월)
+  const scopeTransactions = useMemo(() => {
+    if (selectedMonthFilter === 'all') return transactions;
+    const mNum = parseInt(selectedMonthFilter, 10);
+    if (isNaN(mNum)) return transactions;
+    return transactions.filter((t) => {
+      const txMonth = extractMonthFromDate(t.date, t.sheetTitle);
+      return txMonth === null || txMonth === mNum;
+    });
+  }, [transactions, selectedMonthFilter]);
+
   // Metrics Calculation
   const metrics = useMemo(() => {
     let totalExpense = 0;
@@ -531,7 +564,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     let specialExpense = 0;
     let routineExpense = 0;
 
-    transactions.forEach((t) => {
+    scopeTransactions.forEach((t) => {
       if (t.type === 'expense') {
         totalExpense += t.amount;
         const isRec = Boolean(
@@ -563,7 +596,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const balance = totalIncome - activeTotalExpense;
     const savingRate = totalIncome > 0 ? Math.max(0, Math.round((balance / totalIncome) * 100)) : 0;
 
-    const uniqueDays = new Set(transactions.map((t) => t.date)).size;
+    const uniqueDays = new Set(scopeTransactions.map((t) => t.date)).size;
     const daysInCount = Math.max(uniqueDays, 1);
     const dailyAverageExpense = Math.round(activeTotalExpense / daysInCount);
 
@@ -587,16 +620,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
       balance,
       savingRate,
       dailyAverageExpense,
-      count: transactions.length,
+      count: scopeTransactions.length,
     };
-  }, [transactions, excludeSpecialExpense]);
+  }, [scopeTransactions, excludeSpecialExpense]);
 
   // Category breakdown
   const categoryStats = useMemo(() => {
     const map: Record<string, number> = {};
     let totalExpense = 0;
 
-    transactions.forEach((t) => {
+    scopeTransactions.forEach((t) => {
       if (t.type === 'expense') {
         const isSpec = Boolean(
           t.isSpecial ||
@@ -624,7 +657,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       list: sorted,
       totalExpense,
     };
-  }, [transactions, excludeSpecialExpense]);
+  }, [scopeTransactions, excludeSpecialExpense]);
 
   // Transactions belonging to selectedCategoryDetail for temporary popup drill-down modal
   const categoryModalData = useMemo(() => {
@@ -1230,7 +1263,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <div className="p-3.5 sm:p-4 bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-xs text-slate-300 font-bold">{activeSheetTitle} 잔액</span>
+              <span className="text-xs text-slate-300 font-bold">
+                {isYearlyUnifiedTab
+                  ? selectedMonthFilter === 'all'
+                    ? `${activeTabYear || activeSheetTitle}년 전체 잔액`
+                    : `${activeTabYear || activeSheetTitle}년 ${selectedMonthFilter}월 잔액`
+                  : `${activeSheetTitle} 잔액`}
+              </span>
               <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-white/10 text-slate-300">
                 수입 - 지출
               </span>
@@ -1637,7 +1676,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                 }`}
               >
-                전체 ({transactions.length})
+                {isYearlyUnifiedTab ? `${activeTabYear || activeSheetTitle}년 전체` : '전체'} ({transactions.length})
               </button>
               {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => {
                 const count = transactions.filter(
@@ -1650,7 +1689,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     ref={isSelected ? activeMonthBadgeRef : undefined}
                     onClick={() => {
                       setSelectedMonthFilter(String(m));
-                      if (onSelectSheetTab) {
+                      if (onSelectSheetTab && !isYearlyUnifiedTab) {
                         onSelectSheetTab(`${m}월`);
                       }
                     }}
@@ -1970,7 +2009,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     {/분류관리|기준목록|설정|카테고리/i.test(activeSheetTitle)
                       ? '현재 탭은 가계부 분류/기준 설정용 시트입니다. 실제 지출 거래 내역을 보시려면 아래 시트 탭 목록에서 지출내역 또는 해당 월 시트를 선택해 주세요.'
                       : /dashboard|대시보드|요약/i.test(activeSheetTitle)
-                      ? '현재 탭은 연간 요약 매트릭스 대시보드입니다. 상단 탭에서 [2026 연간 요약 매트릭스]를 누르시면 전체 요약표를 보실 수 있습니다.'
+                      ? '현재 탭은 연간 요약 매트릭스 대시보드입니다. 상단 탭에서 [연간 매트릭스]를 누르시면 전체 요약표를 보실 수 있습니다.'
                       : '아직 기록된 지출이나 수입 내역이 없거나, 다른 월/시트에 데이터가 보관되어 있을 수 있습니다.'}
                   </p>
                 </div>
@@ -3222,6 +3261,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               transactions={transactions}
               sheetTabs={sheetTabs}
               onFetchMonthTransactions={onFetchMonthTransactions}
+              isYearlyUnifiedMode={isYearlyUnifiedTab}
             />
           </div>
         </div>

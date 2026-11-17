@@ -26,8 +26,21 @@ import {
   migrateSheetColumns,
   migrateAllMonthSheetsColumns,
   MonthMigrationResult,
+  ConsolidationResult,
+  ImportExternalYearResult,
+  OldMonthTabsAction,
+  PERPETUAL_SUMMARY_TAB_TITLE,
   extractMonthNumberFromTab,
   findTabForMonth,
+  extractYearFromTab,
+  extractYearFromDate,
+  findTabForYear,
+  findAllYearTabs,
+  detectSheetLayoutMode,
+  setStoredLayoutMode,
+  computeYearDashboardDataFromTransactions,
+  consolidateMonthsIntoYearTab,
+  importExternalSpreadsheetToYearTab,
 } from './services/googleSheets';
 import { listSpreadsheets } from './services/googleDrive';
 import { Header } from './components/Header';
@@ -38,9 +51,10 @@ import { SpreadsheetPickerModal } from './components/SpreadsheetPickerModal';
 import { GitHubModal } from './components/GitHubModal';
 import { ConfirmationModal } from './components/ConfirmationModal';
 import { AnnualMatrixView } from './components/AnnualMatrixView';
+import { YearComparisonView } from './components/YearComparisonView';
 import { CategoryManagementModal } from './components/CategoryManagementModal';
 import { DomainAuthModal } from './components/DomainAuthModal';
-import { MigrationAllMonthsModal } from './components/MigrationAllMonthsModal';
+import { UnifiedMigrationModal } from './components/UnifiedMigrationModal';
 import { RegisterYearSheetModal } from './components/RegisterYearSheetModal';
 import { SAMPLE_ANALYSIS, SAMPLE_TRANSACTIONS } from './data/sampleLedger';
 import {
@@ -87,6 +101,8 @@ import {
   Tag,
   RefreshCw,
   UploadCloud,
+  TrendingUp,
+  ArrowRightLeft,
 } from 'lucide-react';
 
 export default function App() {
@@ -180,7 +196,7 @@ export default function App() {
   const [spreadsheetId, setSpreadsheetId] = useState<string>('user-2026-ledger');
   const [spreadsheetTitle, setSpreadsheetTitle] = useState<string>('2026 가계부 Dashboard');
   const [spreadsheetUrl, setSpreadsheetUrl] = useState<string | undefined>(undefined);
-  const [sheetTabs, setSheetTabs] = useState<Array<{ id: number; title: string }>>(() =>
+  const [sheetTabs, setSheetTabs] = useState<Array<{ id: number; title: string; hidden?: boolean }>>(() =>
     ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'].map(
       (m, i) => ({ id: i + 1, title: m })
     )
@@ -357,8 +373,8 @@ export default function App() {
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
-  // Active View Tab: 'matrix' | 'monthly' | 'analyzer'
-  const [activeTab, setActiveTab] = useState<'matrix' | 'monthly' | 'analyzer'>('matrix');
+  // Active View Tab: 'matrix' | 'monthly' | 'comparison' | 'analyzer'
+  const [activeTab, setActiveTab] = useState<'matrix' | 'monthly' | 'comparison' | 'analyzer'>('matrix');
 
   const [yearData, setYearData] = useState<YearDashboardData>(USER_2026_DATA);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
@@ -366,6 +382,14 @@ export default function App() {
   const [isInputModalOpen, setIsInputModalOpen] = useState(false);
   const [openImportOnModal, setOpenImportOnModal] = useState(false);
   const [isRegisterYearModalOpen, setIsRegisterYearModalOpen] = useState(false);
+  const [isMigrationBannerDismissed, setIsMigrationBannerDismissed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return localStorage.getItem('smart_money_hide_perpetual_banner_v2') === 'true';
+    } catch {
+      return false;
+    }
+  });
 
   // Multi-Year Sheets Registry state (e.g. 2026, 2025, 2024...)
   const [yearlySheets, setYearlySheets] = useState<Array<{ year: string; title: string; id: string; url?: string }>>(() => {
@@ -389,10 +413,16 @@ export default function App() {
   });
 
   const activeYear = useMemo(() => {
+    const tabYear = extractYearFromTab(activeSheetTitle);
+    if (tabYear) return String(tabYear);
     const match = spreadsheetTitle?.match(/20\d{2}/) || activeSheetTitle?.match(/20\d{2}/);
     if (!match) return '2026';
     return typeof match === 'string' ? match : match[0];
   }, [spreadsheetTitle, activeSheetTitle]);
+
+  const isYearlyUnifiedMode = useMemo(() => {
+    return detectSheetLayoutMode(sheetTabs, activeSheetTitle, spreadsheetId) === 'yearly';
+  }, [sheetTabs, activeSheetTitle, spreadsheetId]);
 
   // Floating Real-time Sync Toast Notification
   const [syncToast, setSyncToast] = useState<{
@@ -431,6 +461,21 @@ export default function App() {
     spreadsheetId &&
     !['sample-ledger-2026', 'user-2026-ledger', 'pasted-sheet'].includes(spreadsheetId)
   );
+
+  const needsPerpetualUpgrade = useMemo(() => {
+    if (!isRealGoogleConnected) return false;
+    const hasVisibleMonths = sheetTabs.some(
+      (t) => !t.hidden && extractMonthNumberFromTab(t.title) !== null
+    );
+    const hasSummaryTab = sheetTabs.some(
+      (t) =>
+        !t.hidden &&
+        (t.title.trim() === PERPETUAL_SUMMARY_TAB_TITLE ||
+          /연도별\s*요약|연도\s*요약/i.test(t.title))
+    );
+    const hasYearTab = findAllYearTabs(sheetTabs).length > 0;
+    return !hasYearTab || hasVisibleMonths || !hasSummaryTab;
+  }, [isRealGoogleConnected, sheetTabs]);
 
   // 1. Initialize Auth on Mount with session restoration
   useEffect(() => {
@@ -488,7 +533,11 @@ export default function App() {
         setSpreadsheetTitle(meta.title);
         setSpreadsheetUrl(`https://docs.google.com/spreadsheets/d/${sId}`);
 
-        const formattedTabs = meta.sheets.map((s) => ({ id: s.id, title: s.title }));
+        const formattedTabs = meta.sheets.map((s) => ({
+          id: s.id,
+          title: s.title,
+          hidden: s.hidden,
+        }));
         setSheetTabs(formattedTabs);
 
         // Auto-load categories & payment methods from '분류설정' sheet tab if present
@@ -528,14 +577,35 @@ export default function App() {
         const isDashboardTab = (t: string) =>
           /dashboard|대시보드|요약|summary|연간|matrix/i.test(t);
 
-        // Intelligently find target sheet
-        const reqMonthNum = extractMonthNumberFromTab(sheetName);
+        // Intelligently find target sheet (supports both unified year tabs e.g. '2026' and legacy monthly tabs '1월'~'12월')
+        const detectedMode = detectSheetLayoutMode(formattedTabs, sheetName, sId);
+        const reqTabYear = extractYearFromTab(sheetName);
+        const reqMonthNum = reqTabYear === null ? extractMonthNumberFromTab(sheetName) : null;
 
         let targetSheet = sheetName;
         const exactMatch = formattedTabs.find((t) => t.title === targetSheet);
 
-        if (exactMatch) {
+        if (
+          exactMatch &&
+          !(detectedMode === 'yearly' && exactMatch.hidden && extractYearFromTab(exactMatch.title) === null)
+        ) {
           targetSheet = exactMatch.title;
+        } else if (reqTabYear !== null) {
+          const matchedYearTab = findTabForYear(formattedTabs, reqTabYear);
+          targetSheet = matchedYearTab ? matchedYearTab.title : sheetName;
+        } else if (detectedMode === 'yearly') {
+          // Prefer current calendar year tab or latest available year tab
+          const curCalYear = new Date().getFullYear();
+          const yearTabs = findAllYearTabs(formattedTabs);
+          const curYearTab = findTabForYear(formattedTabs, curCalYear);
+          if (curYearTab) {
+            targetSheet = curYearTab.title;
+          } else if (yearTabs.length > 0) {
+            targetSheet = yearTabs[0].title;
+          } else if (reqMonthNum !== null) {
+            const matchedTab = findTabForMonth(formattedTabs, reqMonthNum);
+            targetSheet = matchedTab ? matchedTab.title : sheetName;
+          }
         } else if (reqMonthNum !== null) {
           // Priority 1: Match tab for requested month (e.g. "1월", "01월", "1", "01", "1월 지출")
           const matchedTab = findTabForMonth(formattedTabs, reqMonthNum);
@@ -566,6 +636,7 @@ export default function App() {
           }
         }
         setActiveSheetTitle(targetSheet);
+        const targetTabYear = extractYearFromTab(targetSheet);
 
         // Fetch sheet values without arbitrary row limit (fetch entire sheet A:Z)
         let rows: string[][] = [];
@@ -587,9 +658,9 @@ export default function App() {
           }
           setActiveTab('matrix');
         } else {
-          // If a dashboard or annual matrix tab exists elsewhere in the sheet, sync yearData in the background
+          // If NOT on a unified year tab and a dashboard/matrix tab exists elsewhere, sync yearData in background
           const dashTab = formattedTabs.find((t) => isDashboardTab(t.title));
-          if (dashTab && targetSheet !== dashTab.title) {
+          if (targetTabYear === null && dashTab && targetSheet !== dashTab.title) {
             getSheetValues(sId, dashTab.title, token, 'A:Z')
               .then((dashRows) => {
                 const matrix = extractYearMatrixData(dashRows);
@@ -599,15 +670,17 @@ export default function App() {
               })
               .catch((err) => console.warn('Background dashboard tab sync warning:', err));
           }
-          // Find any pending transactions for this month or sheet so they are never wiped!
+          // Find any pending transactions for this year/month/sheet so they are never wiped!
           const currentPending = loadPendingQueue();
           const pendingForThisSheet = currentPending.filter((p) => {
+            if (p.sheetTitle === targetSheet) return true;
+            if (targetTabYear !== null) {
+              const pYear = extractYearFromDate(p.date) || extractYearFromTab(p.sheetTitle);
+              return pYear === targetTabYear;
+            }
             const pMonth = extractMonthNumberFromTab(p.sheetTitle || p.date);
             const curMonth = reqMonthNum !== null ? reqMonthNum : extractMonthNumberFromTab(targetSheet);
-            return (
-              p.sheetTitle === targetSheet ||
-              (pMonth !== null && curMonth !== null && pMonth === curMonth)
-            );
+            return pMonth !== null && curMonth !== null && pMonth === curMonth;
           });
 
           if (result.transactions.length > 0) {
@@ -623,18 +696,34 @@ export default function App() {
                 merged.unshift(p);
               }
             });
-            setTransactions(enrichTransactionsWithSubItems(merged));
+            const enriched = enrichTransactionsWithSubItems(merged);
+            setTransactions(enriched);
+            if (targetTabYear !== null) {
+              setYearData(computeYearDashboardDataFromTransactions(enriched, targetTabYear));
+            }
           } else if (pendingForThisSheet.length > 0) {
             // Sheet is empty or new: keep pending transactions visible!
-            setTransactions(enrichTransactionsWithSubItems(pendingForThisSheet));
+            const enrichedPending = enrichTransactionsWithSubItems(pendingForThisSheet);
+            setTransactions(enrichedPending);
+            if (targetTabYear !== null) {
+              setYearData(computeYearDashboardDataFromTransactions(enrichedPending, targetTabYear));
+            }
           } else if (!isRealGoogleConnected && reqMonthNum !== null) {
             // Only in offline sample mode if no transactions exist
             const fallbackTxs = generateUserMonthlyTransactions(reqMonthNum - 1);
             setTransactions(enrichTransactionsWithSubItems(fallbackTxs));
           } else {
             setTransactions([]);
+            if (targetTabYear !== null) {
+              setYearData({
+                year: targetTabYear,
+                totalIncome: 0,
+                totalExpense: 0,
+                categories: [],
+              });
+            }
           }
-          setActiveTab('monthly');
+          setActiveTab((prev) => (prev === 'comparison' ? 'comparison' : 'monthly'));
         }
       } catch (err: any) {
         console.error('Failed to load sheet:', err);
@@ -668,13 +757,62 @@ export default function App() {
     }
   };
 
-  // Fetch real transactions for a specific month tab on demand (used by AnnualMatrixView)
+  // Switch directly to an integrated year tab inside the current file (e.g. '2026', '2025')
+  const handleSelectYearTab = useCallback(
+    (tabTitle: string) => {
+      setActiveSheetTitle(tabTitle);
+      setActiveTab((prev) => (prev === 'analyzer' || prev === 'comparison' ? 'monthly' : prev));
+      if (isRealGoogleConnected) {
+        loadSheetData(spreadsheetId, tabTitle, accessToken);
+      } else {
+        setAnalysis((prev) => ({
+          ...prev,
+          activeSheetTitle: tabTitle,
+        }));
+      }
+    },
+    [isRealGoogleConnected, spreadsheetId, accessToken, loadSheetData]
+  );
+
+  // Fetch real transactions for a specific month (or monthNum===0 for entire active unified year tab)
   const handleFetchMonthTransactions = useCallback(
     async (monthNum: number): Promise<Transaction[]> => {
       if (!spreadsheetId) return [];
       const effectiveToken = accessToken || getSavedToken() || null;
-      let targetTabTitle: string | null = null;
+      const activeTabYear = extractYearFromTab(activeSheetTitle);
+      const isUnified =
+        activeTabYear !== null ||
+        detectSheetLayoutMode(sheetTabs, activeSheetTitle, spreadsheetId) === 'yearly';
 
+      // Unified year tab holds all 12 months in one tab!
+      if (isUnified) {
+        const targetYearNum = activeTabYear || Number(activeYear) || new Date().getFullYear();
+        const yearTab = findTabForYear(sheetTabs, targetYearNum);
+        const targetTabTitle = yearTab ? yearTab.title : activeSheetTitle || String(targetYearNum);
+
+        try {
+          const rows = await getSheetValues(spreadsheetId, targetTabTitle, effectiveToken, 'A:Z');
+          if (!rows || rows.length === 0) return [];
+          const result = analyzeSheetStructure(spreadsheetId, spreadsheetTitle, sheetTabs, targetTabTitle, rows);
+          const realTransactions = enrichTransactionsWithSubItems(
+            (result.transactions || []).filter(
+              (t) => !t.id?.startsWith('user-2026-') && !t.id?.startsWith('sample-')
+            )
+          );
+          if (monthNum === 0) return realTransactions;
+          return realTransactions.filter((t) => {
+            const md = t.date?.match(/^\d{4}\s*[-.\/]\s*(\d{1,2})/);
+            return md ? parseInt(md[1], 10) === monthNum : true;
+          });
+        } catch (err) {
+          console.warn(`Failed to fetch unified year tab ${targetTabTitle}:`, err);
+          return [];
+        }
+      }
+
+      if (monthNum <= 0) return [];
+
+      let targetTabTitle: string | null = null;
       const matchedTab = findTabForMonth(sheetTabs, monthNum);
       if (matchedTab) {
         targetTabTitle = matchedTab.title;
@@ -698,7 +836,7 @@ export default function App() {
         return [];
       }
     },
-    [spreadsheetId, accessToken, sheetTabs, spreadsheetTitle]
+    [spreadsheetId, accessToken, sheetTabs, spreadsheetTitle, activeSheetTitle, activeYear]
   );
 
   // When user selects a different spreadsheet from Google Drive
@@ -816,39 +954,62 @@ export default function App() {
     [handleSelectYearSheet]
   );
 
+  // Resolve target tab cleanly for both unified yearly mode ('2026', '2027') and legacy monthly mode ('10월')
+  const resolveTargetTabForTx = useCallback(
+    (tx: { date?: string; sheetTitle?: string }) => {
+      const mode = detectSheetLayoutMode(sheetTabs, activeSheetTitle, spreadsheetId);
+      let monthNum = 10;
+      if (tx.date) {
+        const parts = tx.date.split('-');
+        if (parts.length >= 2) {
+          const m = parseInt(parts[1], 10);
+          if (!isNaN(m) && m >= 1 && m <= 12) monthNum = m;
+        }
+      } else if (tx.sheetTitle) {
+        const mFromTab = extractMonthNumberFromTab(tx.sheetTitle);
+        if (mFromTab !== null) monthNum = mFromTab;
+      }
+
+      if (mode === 'yearly') {
+        const txYear =
+          extractYearFromDate(tx.date) ||
+          extractYearFromTab(tx.sheetTitle) ||
+          Number(activeYear) ||
+          new Date().getFullYear();
+        const matchedYearTab = findTabForYear(sheetTabs, txYear);
+        return {
+          targetSheetTitle: matchedYearTab ? matchedYearTab.title : String(txYear),
+          monthNum,
+          yearNum: txYear,
+        };
+      }
+
+      const targetMonth = `${monthNum}월`;
+      let targetSheetTitle = targetMonth;
+      if (sheetTabs && sheetTabs.length > 0) {
+        const matched = findTabForMonth(sheetTabs, monthNum);
+        if (matched) {
+          targetSheetTitle = matched.title;
+        } else {
+          const direct = sheetTabs.find((t) => t.title === (tx.sheetTitle || targetMonth));
+          if (direct) targetSheetTitle = direct.title;
+        }
+      }
+      return {
+        targetSheetTitle,
+        monthNum,
+        yearNum: Number(activeYear) || 2026,
+      };
+    },
+    [sheetTabs, activeSheetTitle, spreadsheetId, activeYear]
+  );
+
   // Add Transaction Handler with Direct Real-time Google Sheets Sync
   const handleAddTransaction = async (
     newTx: Omit<Transaction, 'id' | 'rowIndex'> & { sheetTitle?: string }
   ) => {
-    // 1. Automatically calculate target month from date
-    let targetMonth = activeSheetTitle || '10월';
-    let monthNum = 10;
-    if (newTx.date) {
-      const parts = newTx.date.split('-');
-      if (parts.length >= 2) {
-        const m = parseInt(parts[1], 10);
-        if (!isNaN(m) && m >= 1 && m <= 12) {
-          targetMonth = `${m}월`;
-          monthNum = m;
-        }
-      }
-    }
-
-    // Resolve exact matching sheet tab in user's spreadsheet
-    let targetSheetTitle = targetMonth;
-    if (sheetTabs && sheetTabs.length > 0) {
-      const matched = findTabForMonth(sheetTabs, monthNum);
-      if (matched) {
-        targetSheetTitle = matched.title;
-      } else {
-        const direct = sheetTabs.find((t) => t.title === targetMonth);
-        if (direct) {
-          targetSheetTitle = direct.title;
-        }
-        // If not in sheetTabs, targetSheetTitle stays targetMonth (e.g. '10월')
-        // appendTransactionRow will create the '10월' tab in Google Sheets!
-      }
-    }
+    // 1. Resolve target sheet tab (yearly unified tab OR monthly tab)
+    const { targetSheetTitle, monthNum } = resolveTargetTabForTx(newTx);
 
     // 2. Accumulate into the YearDashboardData (2026 Annual Matrix)
     const monthIndex = monthNum - 1;
@@ -1370,36 +1531,15 @@ export default function App() {
     }
   };
 
-  // Batch Add Transactions Handler (supports both single-month recurring import & multi-month card installments)
+  // Batch Add Transactions Handler (supports both single-month recurring import & multi-month/multi-year card installments)
   const handleBatchAddTransactions = async (
     newTxs: Array<Omit<Transaction, 'id' | 'rowIndex'> & { sheetTitle?: string }>
   ) => {
     if (!newTxs || newTxs.length === 0) return;
 
-    const resolveTargetTab = (tx: Omit<Transaction, 'id' | 'rowIndex'> & { sheetTitle?: string }) => {
-      let monthNum: number | null = null;
-      if (tx.date) {
-        const parts = tx.date.split('-');
-        if (parts.length >= 2) {
-          const m = parseInt(parts[1], 10);
-          if (!isNaN(m) && m >= 1 && m <= 12) monthNum = m;
-        }
-      }
-      if (monthNum === null && tx.sheetTitle) {
-        monthNum = extractMonthNumberFromTab(tx.sheetTitle);
-      }
-      const fallbackTab = monthNum ? `${monthNum}월` : tx.sheetTitle || activeSheetTitle || '11월';
-      if (monthNum && sheetTabs && sheetTabs.length > 0) {
-        const matched = findTabForMonth(sheetTabs, monthNum);
-        if (matched) return { sheetTitle: matched.title, monthNum };
-      }
-      const direct = sheetTabs?.find((t) => t.title === fallbackTab);
-      return { sheetTitle: direct ? direct.title : fallbackTab, monthNum: monthNum || 11 };
-    };
-
     const resolvedItems = newTxs.map((tx, idx) => {
-      const { sheetTitle, monthNum } = resolveTargetTab(tx);
-      return { tx, sheetTitle, monthNum, idx };
+      const { targetSheetTitle, monthNum } = resolveTargetTabForTx(tx);
+      return { tx, sheetTitle: targetSheetTitle, monthNum, idx };
     });
 
     // Update YearDashboardData across all affected months
@@ -1578,17 +1718,15 @@ export default function App() {
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
-    // Resolve target tab title in spreadsheet
-    let targetSheetTitle = targetMonth;
-    if (sheetTabs && sheetTabs.length > 0) {
-      const matched = findTabForMonth(sheetTabs, targetMonthNum);
-      if (matched) {
-        targetSheetTitle = matched.title;
-      } else {
-        const direct = sheetTabs.find((t) => t.title === targetMonth);
-        if (direct) targetSheetTitle = direct.title;
-      }
-    }
+    // Resolve target tab title in spreadsheet (respects unified yearly mode)
+    const targetSampleDate =
+      dateMode === 'custom' && customDate
+        ? customDate
+        : `${Number(activeYear) || now.getFullYear()}-${String(targetMonthNum).padStart(2, '0')}-01`;
+    const { targetSheetTitle } = resolveTargetTabForTx({
+      date: targetSampleDate,
+      sheetTitle: targetMonth,
+    });
 
     // Build new transactions
     const newTransactions: Array<Omit<Transaction, 'id' | 'rowIndex'> & { sheetTitle?: string }> = items.map(
@@ -1839,16 +1977,16 @@ export default function App() {
     }
 
     if (!isRealGoogleConnected) {
-      if (confirm('현재 샘플 2026 가계부를 사용 중입니다.\n내 구글 드라이브에 실제 [2026 스마트가계부] 시트를 생성하시겠습니까?\n(사용설명서, 분류설정, 1~12월 탭이 자동으로 포함됩니다)')) {
+      if (confirm('현재 샘플 2026 가계부를 사용 중입니다.\n내 구글 드라이브에 실제 [스마트 만년 가계부] (2026 통합 시트)를 생성하시겠습니까?\n(📊 연도별 요약, 2026, ⚙️ 분류설정, 📖 사용설명서 탭이 자동으로 포함됩니다)')) {
         try {
           setIsCreatingSettingsTab(true);
           const { createGoogleSheetWithTemplate } = await import('./services/templateGenerator');
-          const res = await createGoogleSheetWithTemplate(currentToken, 2026, customCategories, customPaymentMethods);
-          handleSelectSpreadsheet(res.spreadsheetId, '2026 스마트가계부', currentToken);
+          const res = await createGoogleSheetWithTemplate(currentToken, 2026, customCategories, customPaymentMethods, '스마트 만년 가계부');
+          handleSelectSpreadsheet(res.spreadsheetId, '스마트 만년 가계부', currentToken);
           setSyncToast({
             show: true,
             type: 'success',
-            message: '구글 드라이브에 [2026 스마트가계부] 시트가 성공적으로 생성되었습니다!',
+            message: '구글 드라이브에 [스마트 만년 가계부] 시트가 성공적으로 생성되었습니다!',
           });
         } catch (e: any) {
           alert(`시트 생성 실패: ${e?.message || e}`);
@@ -1973,32 +2111,8 @@ export default function App() {
       const failedItems: Transaction[] = [];
 
       for (const tx of pendingSyncList) {
-        // Resolve target sheet tab for this transaction's month
-        let targetMonth = tx.sheetTitle || activeSheetTitle || '10월';
-        let monthNum = 10;
-        if (tx.date) {
-          const parts = tx.date.split('-');
-          if (parts.length >= 2) {
-            const m = parseInt(parts[1], 10);
-            if (!isNaN(m) && m >= 1 && m <= 12) {
-              targetMonth = `${m}월`;
-              monthNum = m;
-            }
-          }
-        }
-
-        let targetSheetTitle = targetMonth;
-        if (sheetTabs && sheetTabs.length > 0) {
-          const matched = findTabForMonth(sheetTabs, monthNum);
-          if (matched) {
-            targetSheetTitle = matched.title;
-          } else {
-            const direct = sheetTabs.find((t) => t.title === targetMonth);
-            if (direct) {
-              targetSheetTitle = direct.title;
-            }
-          }
-        }
+        // Resolve target sheet tab for this transaction's year/month
+        const { targetSheetTitle } = resolveTargetTabForTx(tx);
 
         try {
           await appendTransactionRow(
@@ -2219,8 +2333,9 @@ export default function App() {
     }
   };
 
-  // 2026 1월~12월 전체 시트 일괄 컬럼 분리 및 마이그레이션
+  // 연도 통합 · 데이터 이관 및 1월~12월 전체 시트 일괄 컬럼 분리
   const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
+  const [migrationModalInitialTab, setMigrationModalInitialTab] = useState<'consolidate' | 'import_external' | 'columns_only'>('consolidate');
   const [isMigratingAllMonths, setIsMigratingAllMonths] = useState(false);
   const [migrationProgress, setMigrationProgress] = useState<{
     month: string;
@@ -2230,6 +2345,189 @@ export default function App() {
   } | null>(null);
   const [migrationResults, setMigrationResults] = useState<MonthMigrationResult[] | null>(null);
   const [totalMigratedTxs, setTotalMigratedTxs] = useState<number>(0);
+
+  const handleOpenMigrationWithTab = useCallback(
+    (tab: 'consolidate' | 'import_external' | 'columns_only' = 'consolidate') => {
+      setMigrationModalInitialTab(tab);
+      setIsMigrationModalOpen(true);
+    },
+    []
+  );
+
+  const ensureValidTokenOrLogin = useCallback(async (): Promise<string | null> => {
+    let token = accessToken || (await getAccessToken());
+    if (!token) {
+      if (confirm('구글 시트 데이터 이관을 진행하려면 Google 로그인이 필요합니다.\n지금 로그인하시겠습니까?')) {
+        const loginRes = await googleSignIn();
+        if (loginRes?.accessToken) {
+          token = loginRes.accessToken;
+          setAccessToken(token);
+          return token;
+        }
+      }
+      return null;
+    }
+    return token;
+  }, [accessToken]);
+
+  const handleConsolidateCurrentFile = useCallback(
+    async (
+      params: {
+        targetYear: number;
+        targetTabTitle: string;
+        mergeWithExisting: boolean;
+        newSpreadsheetTitle?: string;
+        oldMonthTabsAction: OldMonthTabsAction;
+        createSummaryTab: boolean;
+      },
+      onProgress: (info: { index: number; total: number; message: string }) => void
+    ): Promise<ConsolidationResult | null> => {
+      if (!isRealGoogleConnected || !spreadsheetId) {
+        alert('Google 시트가 연동되어 있지 않습니다.');
+        return null;
+      }
+      let token = await ensureValidTokenOrLogin();
+      if (!token) return null;
+
+      const applyPostConsolidation = async (res: ConsolidationResult, usedToken: string) => {
+        setStoredLayoutMode(spreadsheetId, 'yearly');
+        if (res.renamedTitle) {
+          setSpreadsheetTitle(res.renamedTitle);
+          try {
+            localStorage.setItem('smart_money_spreadsheet_title', res.renamedTitle);
+          } catch {}
+        }
+        const meta = await getSpreadsheetDetails(spreadsheetId, usedToken);
+        if (meta?.sheets) {
+          setSheetTabs(meta.sheets.map((s) => ({ id: s.id, title: s.title, hidden: s.hidden })));
+        }
+        if (meta?.title) {
+          setSpreadsheetTitle(meta.title);
+          try {
+            localStorage.setItem('smart_money_spreadsheet_title', meta.title);
+          } catch {}
+        }
+        await loadSheetData(spreadsheetId, res.targetTabTitle, usedToken);
+        setSyncToast({
+          show: true,
+          type: 'success',
+          message: `✨ 구글 시트 [${res.targetTabTitle}] 만년 가계부 전환 완료! (${res.totalRowsWritten}건 정리${res.summaryTabCreated ? ' · 연도별 요약 탭 생성' : ''})`,
+        });
+      };
+
+      try {
+        const res = await consolidateMonthsIntoYearTab({
+          spreadsheetId,
+          targetYear: params.targetYear,
+          targetTabTitle: params.targetTabTitle,
+          mergeWithExistingTarget: params.mergeWithExisting,
+          newSpreadsheetTitle: params.newSpreadsheetTitle,
+          oldMonthTabsAction: params.oldMonthTabsAction,
+          createSummaryTab: params.createSummaryTab,
+          accessToken: token,
+          onProgress,
+        });
+
+        await applyPostConsolidation(res, token);
+        return res;
+      } catch (err: any) {
+        if (isAuthExpiredError(err) || err?.message?.includes('AUTH_EXPIRED')) {
+          if (confirm('Google 계정 인증이 만료되었습니다. 다시 로그인하여 계속 진행하시겠습니까?')) {
+            const loginRes = await googleSignIn();
+            if (loginRes?.accessToken) {
+              setAccessToken(loginRes.accessToken);
+              const res = await consolidateMonthsIntoYearTab({
+                spreadsheetId,
+                targetYear: params.targetYear,
+                targetTabTitle: params.targetTabTitle,
+                mergeWithExistingTarget: params.mergeWithExisting,
+                newSpreadsheetTitle: params.newSpreadsheetTitle,
+                oldMonthTabsAction: params.oldMonthTabsAction,
+                createSummaryTab: params.createSummaryTab,
+                accessToken: loginRes.accessToken,
+                onProgress,
+              });
+              await applyPostConsolidation(res, loginRes.accessToken);
+              return res;
+            }
+          }
+          return null;
+        }
+        throw err;
+      }
+    },
+    [isRealGoogleConnected, spreadsheetId, ensureValidTokenOrLogin, loadSheetData]
+  );
+
+  const handleImportExternalFile = useCallback(
+    async (
+      params: {
+        sourceSpreadsheetId: string;
+        targetYear: number;
+        targetTabTitle: string;
+        mergeWithExisting: boolean;
+      },
+      onProgress: (info: { index: number; total: number; message: string }) => void
+    ): Promise<ImportExternalYearResult | null> => {
+      if (!isRealGoogleConnected || !spreadsheetId) {
+        alert('Google 시트가 연동되어 있지 않습니다.');
+        return null;
+      }
+      let token = await ensureValidTokenOrLogin();
+      if (!token) return null;
+
+      try {
+        const res = await importExternalSpreadsheetToYearTab({
+          targetSpreadsheetId: spreadsheetId,
+          sourceSpreadsheetId: params.sourceSpreadsheetId,
+          targetYear: params.targetYear,
+          targetTabTitle: params.targetTabTitle,
+          mergeWithExisting: params.mergeWithExisting,
+          accessToken: token,
+          onProgress,
+        });
+
+        setStoredLayoutMode(spreadsheetId, 'yearly');
+        const meta = await getSpreadsheetDetails(spreadsheetId, token);
+        if (meta?.sheets) {
+          setSheetTabs(meta.sheets.map((s) => ({ id: s.id, title: s.title, hidden: s.hidden })));
+        }
+        setSyncToast({
+          show: true,
+          type: 'success',
+          message: `🎉 '${res.sourceSpreadsheetTitle}' → [${res.targetTabTitle}] 탭으로 ${res.totalRowsWritten}건 이관 및 요약 시트 반영 완료!`,
+        });
+        return res;
+      } catch (err: any) {
+        if (isAuthExpiredError(err) || err?.message?.includes('AUTH_EXPIRED')) {
+          if (confirm('Google 계정 인증이 만료되었습니다. 다시 로그인하여 이관을 계속하시겠습니까?')) {
+            const loginRes = await googleSignIn();
+            if (loginRes?.accessToken) {
+              setAccessToken(loginRes.accessToken);
+              const res = await importExternalSpreadsheetToYearTab({
+                targetSpreadsheetId: spreadsheetId,
+                sourceSpreadsheetId: params.sourceSpreadsheetId,
+                targetYear: params.targetYear,
+                targetTabTitle: params.targetTabTitle,
+                mergeWithExisting: params.mergeWithExisting,
+                accessToken: loginRes.accessToken,
+                onProgress,
+              });
+              setStoredLayoutMode(spreadsheetId, 'yearly');
+              const meta = await getSpreadsheetDetails(spreadsheetId, loginRes.accessToken);
+              if (meta?.sheets) {
+                setSheetTabs(meta.sheets.map((s) => ({ id: s.id, title: s.title, hidden: s.hidden })));
+              }
+              return res;
+            }
+          }
+          return null;
+        }
+        throw err;
+      }
+    },
+    [isRealGoogleConnected, spreadsheetId, ensureValidTokenOrLogin]
+  );
 
   const handleRunMigrationAllMonths = async () => {
     if (!isRealGoogleConnected || !spreadsheetId) {
@@ -2257,7 +2555,7 @@ export default function App() {
       month: '1월',
       index: 0,
       total: 12,
-      message: '2026년 전체 시트 마이그레이션 준비 중...',
+      message: `${activeYear}년 전체 시트 마이그레이션 준비 중...`,
     });
 
     try {
@@ -2282,7 +2580,7 @@ export default function App() {
       setSyncToast({
         show: true,
         type: 'success',
-        message: `🎉 2026년 1월~12월 전체 시트 컬럼 분리 완료! (총 ${outcome.totalMigratedTxs}건 정리됨)`,
+        message: `🎉 ${activeYear}년 1월~12월 전체 시트 컬럼 분리 완료! (총 ${outcome.totalMigratedTxs}건 정리됨)`,
       });
     } catch (err: any) {
       console.error('All months migration error:', err);
@@ -2308,7 +2606,7 @@ export default function App() {
             setSyncToast({
               show: true,
               type: 'success',
-              message: `🎉 2026년 1월~12월 전체 시트 컬럼 분리 완료! (총 ${outcome.totalMigratedTxs}건 정리됨)`,
+              message: `🎉 ${activeYear}년 1월~12월 전체 시트 컬럼 분리 완료! (총 ${outcome.totalMigratedTxs}건 정리됨)`,
             });
           }
         }
@@ -2358,18 +2656,21 @@ export default function App() {
         isRefreshing={isLoadingData}
         onOpenCategoryManager={() => setIsCategoryModalOpen(true)}
         isRealGoogleConnected={Boolean(isRealGoogleConnected && accessToken)}
-        onOpenMigrationModal={() => setIsMigrationModalOpen(true)}
+        onOpenMigrationModal={() => handleOpenMigrationWithTab('consolidate')}
+        onOpenMigrationImport={() => handleOpenMigrationWithTab('import_external')}
         activeYear={activeYear}
         yearlySheets={yearlySheets}
         onSelectYearSheet={handleSelectYearSheet}
+        onSelectYearTab={handleSelectYearTab}
         onOpenRegisterYearModal={() => setIsRegisterYearModalOpen(true)}
+        isYearlyUnifiedMode={isYearlyUnifiedMode}
       />
 
       {/* Main Content Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-3.5 sm:py-5 space-y-3.5 sm:space-y-4">
         {/* Compact Connection & Data Status Bar */}
         {!isRealGoogleConnected ? (
-          <div className="px-3 py-2 bg-blue-50/90 border border-blue-200/80 rounded-xl text-xs flex items-center justify-between gap-2 shadow-2xs">
+          <div className="px-3 py-2 bg-blue-50/90 border border-blue-200/80 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 shadow-2xs">
             <div className="flex items-center gap-2 min-w-0">
               <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
               <span className="font-bold text-blue-900 shrink-0 text-xs">
@@ -2381,7 +2682,14 @@ export default function App() {
                   : '실제 구글 시트 연동 또는 샘플 데이터로 기능 체험이 가능합니다.'}
               </span>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => handleOpenMigrationWithTab('consolidate')}
+                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[11px] font-black transition shadow-xs cursor-pointer flex items-center gap-1"
+              >
+                <Sparkles className="w-3 h-3" />
+                <span>만년 가계부 전환</span>
+              </button>
               <button
                 onClick={() => setIsPickerOpen(true)}
                 className="px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[11px] font-bold transition cursor-pointer"
@@ -2407,7 +2715,7 @@ export default function App() {
             </div>
           </div>
         ) : accessToken ? (
-          <div className="px-3 py-2 bg-emerald-50/90 border border-emerald-200/80 rounded-xl text-xs flex items-center justify-between gap-2 shadow-2xs">
+          <div className="px-3 py-2 bg-emerald-50/90 border border-emerald-200/80 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 shadow-2xs">
             <div className="flex items-center gap-2 min-w-0">
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
               <span className="font-black text-emerald-950 shrink-0 text-xs flex items-center gap-1">
@@ -2421,7 +2729,15 @@ export default function App() {
                 ({activeSheetTitle} • 입력/수정/삭제 시 시트 원본 실시간 저장)
               </span>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => handleOpenMigrationWithTab('consolidate')}
+                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[11px] font-black transition shadow-xs cursor-pointer flex items-center gap-1"
+                title="현재 구글 시트를 만년 가계부([📊 연도별 요약] + 연도별 탭) 구조로 변환/관리합니다"
+              >
+                <Sparkles className="w-3 h-3" />
+                <span>만년 가계부 전환</span>
+              </button>
               {spreadsheetUrl && (
                 <a
                   href={spreadsheetUrl}
@@ -2443,7 +2759,7 @@ export default function App() {
             </div>
           </div>
         ) : (
-          <div className="px-3 py-2 bg-amber-50/95 border border-amber-200/80 rounded-xl text-xs flex items-center justify-between gap-2 shadow-2xs">
+          <div className="px-3 py-2 bg-amber-50/95 border border-amber-200/80 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 shadow-2xs">
             <div className="flex items-center gap-2 min-w-0">
               <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0" />
               <span className="font-bold text-amber-950 shrink-0 text-xs">읽기 전용 모드</span>
@@ -2455,7 +2771,14 @@ export default function App() {
                 (Google 시트 원본에 즉시 쓰려면 Google 로그인이 필요합니다)
               </span>
             </div>
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+              <button
+                onClick={() => handleOpenMigrationWithTab('consolidate')}
+                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[11px] font-black transition shadow-xs cursor-pointer flex items-center gap-1"
+              >
+                <Sparkles className="w-3 h-3" />
+                <span>만년 가계부 전환</span>
+              </button>
               <button
                 onClick={handleLogin}
                 disabled={isLoggingIn}
@@ -2538,6 +2861,54 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* Notice Banner: Offer 1-click transition of Google Sheet to Smart Perpetual Ledger */}
+        {isRealGoogleConnected &&
+          needsPerpetualUpgrade &&
+          !isMigrationBannerDismissed && (
+            <div className="bg-gradient-to-r from-indigo-500/10 via-blue-500/10 to-violet-500/10 border border-indigo-200 rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5 sm:mt-0">
+                  <ArrowRightLeft className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h4 className="text-xs sm:text-sm font-black text-slate-900">
+                      현재 구글 시트를 [스마트 만년 가계부] 구조로 전환하기
+                    </h4>
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                      구글 시트 직접 통합
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    1~12월 탭을 <strong>[{activeYear}]</strong> 탭으로 합치고, 구글 시트 내 <strong>[📊 연도별 요약]</strong> 수식 탭 생성·파일명 변경·기존 월 탭 숨김까지 원클릭으로 변환합니다.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
+                <button
+                  onClick={() => handleOpenMigrationWithTab('consolidate')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl text-xs font-black shadow-xs transition cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>만년 가계부 전환 실행</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMigrationBannerDismissed(true);
+                    try {
+                      localStorage.setItem('smart_money_hide_perpetual_banner_v2', 'true');
+                    } catch {}
+                  }}
+                  className="px-2 py-1.5 text-[11px] font-bold text-slate-500 hover:text-slate-700 cursor-pointer"
+                >
+                  숨기기
+                </button>
+              </div>
+            </div>
+          )}
 
         {/* Notice Banner: Missing [분류설정] Tab in currently connected sheet */}
         {!hasSettingsTab && (
@@ -2635,6 +3006,18 @@ export default function App() {
             </button>
 
             <button
+              onClick={() => setActiveTab('comparison')}
+              className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+                activeTab === 'comparison'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <TrendingUp className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+              <span>연도별 비교</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('analyzer')}
               className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
                 activeTab === 'analyzer'
@@ -2707,7 +3090,7 @@ export default function App() {
               isExportingMonth={isExportingMonth}
               onMigrateSheetColumns={handleMigrateSheetColumns}
               isMigratingColumns={isMigratingColumns}
-              onOpenMigrationAllMonthsModal={() => setIsMigrationModalOpen(true)}
+              onOpenMigrationAllMonthsModal={() => handleOpenMigrationWithTab('consolidate')}
               onBatchCopyPaste={handleBatchCopyPaste}
               onBatchUpdateCategory={handleBatchUpdateCategory}
               onOpenQuickImportModal={() => {
@@ -2717,6 +3100,33 @@ export default function App() {
               spreadsheetId={spreadsheetId}
               onFetchMonthTransactions={handleFetchMonthTransactions}
               yearData={yearData}
+              isYearlyUnifiedMode={isYearlyUnifiedMode}
+            />
+          ) : activeTab === 'comparison' ? (
+            <YearComparisonView
+              spreadsheetId={spreadsheetId}
+              spreadsheetTitle={spreadsheetTitle}
+              sheetTabs={sheetTabs}
+              activeSheetTitle={activeSheetTitle}
+              activeYear={activeYear}
+              transactions={transactions}
+              yearlySheets={yearlySheets}
+              accessToken={accessToken}
+              isRealGoogleConnected={isRealGoogleConnected}
+              customCategories={customCategories}
+              onOpenMigrationImport={() => handleOpenMigrationWithTab('import_external')}
+              onSelectYearTabOrSheet={(source) => {
+                if (source.yearTabTitle) {
+                  handleSelectYearTab(source.yearTabTitle);
+                  setActiveTab('monthly');
+                } else if (source.externalId) {
+                  handleSelectYearSheet({
+                    year: String(source.year),
+                    id: source.externalId,
+                    title: source.externalTitle || `${source.year} 가계부`,
+                  });
+                }
+              }}
             />
           ) : (
             <SpreadsheetAnalyzer
@@ -2802,6 +3212,7 @@ export default function App() {
                 setOpenImportOnModal(false);
                 setIsCategoryModalOpen(true);
               }}
+              isYearlyUnifiedMode={isYearlyUnifiedMode}
             />
           </div>
         </div>
@@ -2886,19 +3297,40 @@ export default function App() {
         }}
       />
 
-      {/* 2026년 1월~12월 전체 시트 컬럼 분리 & 마이그레이션 모달 */}
-      <MigrationAllMonthsModal
+      {/* 연도 통합 · 데이터 이관 및 컬럼 정리 통합 모달 */}
+      <UnifiedMigrationModal
         isOpen={isMigrationModalOpen}
         onClose={() => setIsMigrationModalOpen(false)}
-        onRunMigration={handleRunMigrationAllMonths}
-        isMigrating={isMigratingAllMonths}
-        progress={migrationProgress}
-        results={migrationResults}
-        totalMigratedTxs={totalMigratedTxs}
+        initialTab={migrationModalInitialTab}
+        spreadsheetId={spreadsheetId}
         spreadsheetTitle={spreadsheetTitle}
         spreadsheetUrl={spreadsheetUrl}
+        sheetTabs={sheetTabs}
+        accessToken={accessToken}
         isRealGoogleConnected={Boolean(isRealGoogleConnected && accessToken)}
+        activeYear={activeYear}
         onLogin={handleLogin}
+        onConsolidateCurrentFile={handleConsolidateCurrentFile}
+        onImportExternalFile={handleImportExternalFile}
+        onRunColumnsMigration={handleRunMigrationAllMonths}
+        isMigratingColumns={isMigratingAllMonths}
+        columnsProgress={migrationProgress}
+        columnsResults={migrationResults}
+        totalMigratedColumnTxs={totalMigratedTxs}
+        onSwitchToYearTab={(tabTitle) => {
+          setIsMigrationModalOpen(false);
+          handleSelectYearTab(tabTitle);
+          setActiveTab('monthly');
+        }}
+        onOpenComparisonView={() => {
+          setIsMigrationModalOpen(false);
+          setActiveTab('comparison');
+        }}
+        isSheetLinked={isRealGoogleConnected}
+        onOpenSpreadsheetPicker={() => {
+          setIsMigrationModalOpen(false);
+          setIsPickerOpen(true);
+        }}
       />
     </div>
   );
