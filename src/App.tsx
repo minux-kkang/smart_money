@@ -868,13 +868,18 @@ export default function App() {
         setAccessToken(res.accessToken);
         setCachedAccessToken(res.accessToken);
 
-        // Search user's drive for ledger files
+        // Search user's drive for ledger files (prefer saved ID or master 만년 가계부 file)
         try {
           const files = await listSpreadsheets(res.accessToken);
           if (files.length > 0) {
-            // Find file that might have '가계부' or year
+            const savedId = localStorage.getItem('smart_money_spreadsheet_id');
+            const savedMatch = savedId ? files.find((f) => f.id === savedId) : undefined;
+            const perpetualMatch = files.find((f) => /만년\s*가계부/i.test(f.name));
             const ledgerFile =
-              files.find((f) => /가계부|budget|지출|2026|2025/i.test(f.name)) || files[0];
+              savedMatch ||
+              perpetualMatch ||
+              files.find((f) => /가계부|budget|지출|2026|2025/i.test(f.name)) ||
+              files[0];
             await handleSelectSpreadsheet(ledgerFile.id, ledgerFile.name, res.accessToken);
           } else {
             // No spreadsheet found, open picker modal

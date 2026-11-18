@@ -1009,6 +1009,12 @@ export function analyzeSheetStructure(
         }
       } else if (parsedAmt < 0) {
         type = 'expense';
+      } else if (
+        /^(수입|급여|월급|보너스|상여|상여금|용돈수입|이자수입|이자|배당|환급|부수입|지원금|성과급|퇴직금)$/.test(
+          rawCategory.replace(/\s+/g, '')
+        )
+      ) {
+        type = 'income';
       }
     }
 
@@ -3830,8 +3836,9 @@ export async function importExternalSpreadsheetToYearTab(params: {
   const matchingYearTab = findTabForYear(sourceTabs, targetYear);
   const txNamedTabs = sourceTabs.filter(
     (t) =>
-      !/dashboard|대시보드|요약|matrix|연간|분류설정|설정|사용설명서|설명서/i.test(t.title) &&
-      !monthTabs.some((m) => m.id === t.id)
+      !/dashboard|대시보드|요약|matrix|연간|분류설정|분류관리|분류|기준|카테고리|통계|차트|결산|설정|사용설명서|설명서/i.test(
+        t.title
+      ) && !monthTabs.some((m) => m.id === t.id)
   );
 
   let tabsToRead: Array<{ id: number; title: string }> = [];
