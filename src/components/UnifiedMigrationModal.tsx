@@ -15,18 +15,28 @@ import {
   ShieldCheck,
   ArrowRight,
   AlertCircle,
+  Upload,
+  Sliders,
+  Eye,
+  RotateCcw,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import {
   ConsolidationResult,
   ImportExternalYearResult,
+  ExternalImportOptions,
+  ExternalSpreadsheetInspection,
+  ExternalSpreadsheetTabInfo,
   MonthMigrationResult,
   OldMonthTabsAction,
   PERPETUAL_SUMMARY_TAB_TITLE,
+  analyzeSheetStructure,
+  classifyExternalTabs,
   extractMonthNumberFromTab,
   findAllYearTabs,
 } from '../services/googleSheets';
 import { listSpreadsheets } from '../services/googleDrive';
-import { SpreadsheetFile } from '../types/ledger';
+import { SpreadsheetFile, Transaction } from '../types/ledger';
 
 type MigrationModalTab = 'consolidate' | 'import_external' | 'columns_only';
 
@@ -53,9 +63,19 @@ interface UnifiedMigrationModalProps {
     },
     onProgress: (info: { index: number; total: number; message: string }) => void
   ) => Promise<ConsolidationResult | null>;
+  onInspectExternalFile?: (params: {
+    sourceSpreadsheetId: string;
+    targetYear: number;
+    previewTabTitle?: string;
+    importOptions?: ExternalImportOptions;
+  }) => Promise<ExternalSpreadsheetInspection | null>;
   onImportExternalFile: (
     params: {
-      sourceSpreadsheetId: string;
+      sourceSpreadsheetId?: string;
+      preloadedSourceTitle?: string;
+      preloadedTabsData?: Array<{ title: string; rows: string[][] }>;
+      selectedTabTitles?: string[];
+      importOptions?: ExternalImportOptions;
       targetYear: number;
       targetTabTitle: string;
       mergeWithExisting: boolean;
@@ -87,6 +107,7 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
   activeYear = '2026',
   onLogin,
   onConsolidateCurrentFile,
+  onInspectExternalFile,
   onImportExternalFile,
   onRunColumnsMigration,
   isMigratingColumns,
@@ -147,8 +168,8 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
     const num = parseInt(activeYear || '2026', 10);
     return String(isNaN(num) ? 2025 : num - 1);
   });
-  const [sourceInputMode, setSourceInputMode] = useState<'drive' | 'url'>(
-    accessToken ? 'drive' : 'url'
+  const [sourceInputMode, setSourceInputMode] = useState<'drive' | 'url' | 'excel'>(
+    accessToken ? 'drive' : 'excel'
   );
   const [driveFiles, setDriveFiles] = useState<SpreadsheetFile[]>([]);
   const [isLoadingDrive, setIsLoadingDrive] = useState<boolean>(false);
@@ -165,6 +186,15 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
   } | null>(null);
   const [importResult, setImportResult] = useState<ImportExternalYearResult | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
+
+  // Column Inspection & Manual Mapping Preview State
+  const [excelFileName, setExcelFileName] = useState<string>('');
+  const [excelTabsData, setExcelTabsData] = useState<Array<{ title: string; rows: string[][] }>>([]);
+  const [isInspectingSource, setIsInspectingSource] = useState<boolean>(false);
+  const [inspection, setInspection] = useState<ExternalSpreadsheetInspection | null>(null);
+  const [selectedTabTitles, setSelectedTabTitles] = useState<string[]>([]);
+  const [manualOverride, setManualOverride] = useState<ExternalImportOptions>({});
+  const [amountColumnMode, setAmountColumnMode] = useState<'single' | 'split'>('single');
 
   const detectedMonthTabs = useMemo(
     () =>
@@ -212,9 +242,192 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
       });
   }, [driveFiles, driveSearch, importYear]);
 
+  const livePreviewParsed = useMemo<{
+    headers: string[];
+    headerRowIndex: number;
+    effectiveMapping: any;
+    transactions: Transaction[];
+  } | null>(() => {
+    if (!inspection || !inspection.rawRows || inspection.rawRows.length === 0) return null;
+    const yearNum = parseInt(importYear.trim(), 10) || 2025;
+    const parsed = analyzeSheetStructure(
+      inspection.sourceSpreadsheetId,
+      `${yearNum}년 가계부`,
+      inspection.allTabs.map((t) => ({ id: t.id, title: t.title })),
+      inspection.previewTabTitle,
+      inspection.rawRows,
+      { ...manualOverride, skipMatrixGuard: true }
+    );
+    const fixedTxs = parsed.transactions.slice(0, 5).map((tx) => {
+      if (tx.date && /^\d{4}-\d{2}-\d{2}$/.test(tx.date)) {
+        const y = parseInt(tx.date.slice(0, 4), 10);
+        if (y === 2026 && yearNum !== 2026) {
+          return { ...tx, date: `${yearNum}${tx.date.slice(4)}` };
+        }
+      }
+      return tx;
+    });
+    return {
+      headers: parsed.analysis.mapping.detectedHeaders,
+      headerRowIndex: parsed.analysis.mapping.headerRowIndex,
+      effectiveMapping: parsed.analysis.mapping,
+      transactions: fixedTxs,
+    };
+  }, [inspection, manualOverride, importYear]);
+
   if (!isOpen) return null;
 
-  const isBusy = isConsolidating || isImportingExternal || isMigratingColumns;
+  const isBusy = isConsolidating || isImportingExternal || isMigratingColumns || isInspectingSource;
+
+  const extractSpreadsheetIdFromInput = (rawInput: string) => {
+    const raw = rawInput.trim();
+    const match = raw.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    return match ? match[1] : raw;
+  };
+
+  const applyInspectionResult = (insp: ExternalSpreadsheetInspection, keepOverrides = false) => {
+    setInspection(insp);
+    if (!keepOverrides) {
+      setSelectedTabTitles(insp.recommendedTabTitles);
+      setManualOverride({});
+      const hasSplit =
+        insp.analysis.mapping.incomeCol !== undefined &&
+        insp.analysis.mapping.expenseCol !== undefined;
+      setAmountColumnMode(hasSplit ? 'split' : 'single');
+    }
+  };
+
+  const handleInspectSource = async (
+    overrideSourceId?: string,
+    previewTab?: string,
+    keepOverrides = false
+  ) => {
+    setImportError(null);
+    const yearNum = parseInt(importYear.trim(), 10) || 2025;
+
+    if (sourceInputMode === 'excel') {
+      if (excelTabsData.length === 0) {
+        setImportError('먼저 .xlsx 또는 .csv 파일을 선택해 주세요.');
+        return;
+      }
+      const tabsMeta = excelTabsData.map((t, idx) => ({ id: idx + 1, title: t.title }));
+      const { allTabs, recommendedTabTitles } = classifyExternalTabs(tabsMeta, yearNum);
+      const chosenTitle = previewTab || recommendedTabTitles[0] || excelTabsData[0].title;
+      const chosenRows = excelTabsData.find((t) => t.title === chosenTitle)?.rows || [];
+      const parsed = analyzeSheetStructure(
+        'local-excel',
+        excelFileName || `${yearNum}년 가계부`,
+        tabsMeta,
+        chosenTitle,
+        chosenRows,
+        { skipMatrixGuard: true }
+      );
+      applyInspectionResult(
+        {
+          sourceSpreadsheetId: 'local-excel',
+          sourceSpreadsheetTitle: excelFileName || `${yearNum}년 가계부`,
+          allTabs,
+          recommendedTabTitles,
+          previewTabTitle: chosenTitle,
+          rawRows: chosenRows.slice(0, 80),
+          analysis: parsed.analysis,
+          sampleTransactions: parsed.transactions.slice(0, 8),
+        },
+        keepOverrides
+      );
+      return;
+    }
+
+    if (!onInspectExternalFile) return;
+    const targetId =
+      overrideSourceId ||
+      (sourceInputMode === 'drive'
+        ? selectedDriveFile?.id || ''
+        : extractSpreadsheetIdFromInput(externalUrlOrId));
+
+    if (!targetId) {
+      setImportError('먼저 원본 스프레드시트 파일이나 링크를 선택해 주세요.');
+      return;
+    }
+
+    setIsInspectingSource(true);
+    try {
+      const insp = await onInspectExternalFile({
+        sourceSpreadsheetId: targetId,
+        targetYear: yearNum,
+        previewTabTitle: previewTab,
+      });
+      if (insp) {
+        applyInspectionResult(insp, keepOverrides);
+      }
+    } catch (err: any) {
+      setImportError(err?.message || '원본 시트 구조를 분석하지 못했습니다.');
+    } finally {
+      setIsInspectingSource(false);
+    }
+  };
+
+  const handleExcelFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImportError(null);
+    setImportResult(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
+      const tabs: Array<{ title: string; rows: string[][] }> = wb.SheetNames.map((name) => {
+        const ws = wb.Sheets[name];
+        const rawAoa = XLSX.utils.sheet_to_json<any[]>(ws, {
+          header: 1,
+          raw: false,
+          dateNF: 'yyyy-mm-dd',
+          defval: '',
+        });
+        const rows = rawAoa.map((r) =>
+          (Array.isArray(r) ? r : []).map((c) => (c === null || c === undefined ? '' : String(c).trim()))
+        );
+        return { title: name, rows };
+      });
+      if (tabs.length === 0) {
+        setImportError('파일에서 시트를 읽을 수 없습니다.');
+        return;
+      }
+      setExcelFileName(file.name);
+      setExcelTabsData(tabs);
+
+      const yearMatch = file.name.match(/(20\d{2})/);
+      const detectedYear = yearMatch ? parseInt(yearMatch[1], 10) : parseInt(importYear.trim(), 10) || 2025;
+      if (yearMatch) {
+        setImportYear(String(detectedYear));
+        setImportTabTitle(String(detectedYear));
+      }
+
+      const tabsMeta = tabs.map((t, idx) => ({ id: idx + 1, title: t.title }));
+      const { allTabs, recommendedTabTitles } = classifyExternalTabs(tabsMeta, detectedYear);
+      const chosenTitle = recommendedTabTitles[0] || tabs[0].title;
+      const chosenRows = tabs.find((t) => t.title === chosenTitle)?.rows || [];
+      const parsed = analyzeSheetStructure(
+        'local-excel',
+        file.name,
+        tabsMeta,
+        chosenTitle,
+        chosenRows,
+        { skipMatrixGuard: true }
+      );
+      applyInspectionResult({
+        sourceSpreadsheetId: 'local-excel',
+        sourceSpreadsheetTitle: file.name,
+        allTabs,
+        recommendedTabTitles,
+        previewTabTitle: chosenTitle,
+        rawRows: chosenRows.slice(0, 80),
+        analysis: parsed.analysis,
+        sampleTransactions: parsed.transactions.slice(0, 8),
+      });
+    } catch (err: any) {
+      setImportError(err?.message || '엑셀/CSV 파일 파싱에 실패했습니다.');
+    }
+  };
 
   const handleRunConsolidate = async () => {
     const yearNum = parseInt(consolidateYear.trim(), 10);
@@ -255,8 +468,14 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
       setImportError('가져올 연도(예: 2025)를 정확히 입력해 주세요.');
       return;
     }
+
     let sourceId = '';
-    if (sourceInputMode === 'drive') {
+    if (sourceInputMode === 'excel') {
+      if (excelTabsData.length === 0) {
+        setImportError('먼저 변환할 엑셀(.xlsx) 또는 CSV 파일을 업로드해 주세요.');
+        return;
+      }
+    } else if (sourceInputMode === 'drive') {
       if (!selectedDriveFile) {
         setImportError('가져올 스프레드시트 파일을 선택해 주세요.');
         return;
@@ -268,11 +487,10 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
         setImportError('스프레드시트 링크 또는 ID를 입력해 주세요.');
         return;
       }
-      const match = raw.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
-      sourceId = match ? match[1] : raw;
+      sourceId = extractSpreadsheetIdFromInput(raw);
     }
 
-    if (sourceId === spreadsheetId) {
+    if (sourceId && sourceId === spreadsheetId) {
       setImportError('현재 열려 있는 파일과 동일한 파일입니다. 현재 파일 통합은 첫 번째 탭을 이용해 주세요.');
       return;
     }
@@ -281,11 +499,16 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
     setIsImportingExternal(true);
     setImportError(null);
     setImportResult(null);
-    setImportProgress({ index: 0, total: 10, message: '외부 파일 연결 중...' });
+    setImportProgress({ index: 0, total: 10, message: '원본 데이터 변환 및 이관 준비 중...' });
     try {
+      const hasManualOverride = Object.keys(manualOverride).length > 0;
       const res = await onImportExternalFile(
         {
-          sourceSpreadsheetId: sourceId,
+          sourceSpreadsheetId: sourceInputMode === 'excel' ? undefined : sourceId,
+          preloadedSourceTitle: sourceInputMode === 'excel' ? excelFileName : undefined,
+          preloadedTabsData: sourceInputMode === 'excel' ? excelTabsData : undefined,
+          selectedTabTitles: selectedTabTitles.length > 0 ? selectedTabTitles : undefined,
+          importOptions: hasManualOverride ? { ...manualOverride, skipMatrixGuard: true } : undefined,
           targetYear: yearNum,
           targetTabTitle: tabTitle,
           mergeWithExisting: mergeExternal,
@@ -715,12 +938,15 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
               <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl space-y-1.5">
                 <div className="flex items-center gap-2 text-blue-950 font-black text-xs sm:text-sm">
                   <FolderInput className="w-4 h-4 text-blue-600 shrink-0" />
-                  <span>과거 연도별 가계부 파일을 현재 마스터 시트의 연도 탭으로 가져오기</span>
+                  <span>과거 연도별 가계부 파일을 표준 9컬럼으로 변환해 가져오기</span>
                 </div>
                 <p className="text-xs text-blue-900 leading-relaxed">
-                  예전에 따로 관리하던 <strong>2025년, 2024년</strong> 스프레드시트(1월~12월 탭 구조 또는 단일 탭 모두 지원)를 읽어
-                  현재 파일의 <strong>[{importTabTitle}]</strong> 탭으로 한 번에 이관합니다. 이관이 끝나면 <strong>연도별 비교</strong> 탭에서 즉시 비교할 수 있습니다.
+                  컬럼 구조가 다른 <strong>2025년, 2024년</strong> 구글 시트 또는 엑셀(.xlsx/.csv) 파일을 불러와 열 매핑을 맞춘 뒤{' '}
+                  <strong>[{importTabTitle}]</strong> 탭으로 한 번에 변환·병합합니다.
                 </p>
+                <div className="text-[11px] font-bold text-blue-800 bg-white/80 border border-blue-200/80 rounded-lg px-2.5 py-1.5">
+                  표준 변환 목표(9컬럼): 날짜 · 구분 · 분류 · 내용/사용처 · 금액 · 결제수단 · 지출유형 · 세부품목 · 비고
+                </div>
               </div>
 
               {/* Step 1: Target Year & Tab Name */}
@@ -775,14 +1001,17 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
 
               {/* Step 2: Source File Picker */}
               <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <label className="text-xs font-black text-slate-700">
-                    3. 가져올 원본 스프레드시트 선택
+                    3. 가져올 원본 파일 선택
                   </label>
                   <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg">
                     <button
                       type="button"
-                      onClick={() => setSourceInputMode('drive')}
+                      onClick={() => {
+                        setSourceInputMode('drive');
+                        setInspection(null);
+                      }}
                       className={`px-2.5 py-1 rounded-md text-[11px] font-bold cursor-pointer ${
                         sourceInputMode === 'drive'
                           ? 'bg-white text-blue-700 shadow-2xs'
@@ -793,7 +1022,10 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
                     </button>
                     <button
                       type="button"
-                      onClick={() => setSourceInputMode('url')}
+                      onClick={() => {
+                        setSourceInputMode('url');
+                        setInspection(null);
+                      }}
                       className={`px-2.5 py-1 rounded-md text-[11px] font-bold cursor-pointer ${
                         sourceInputMode === 'url'
                           ? 'bg-white text-blue-700 shadow-2xs'
@@ -801,6 +1033,20 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
                       }`}
                     >
                       링크 / ID 입력
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSourceInputMode('excel');
+                        setInspection(null);
+                      }}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-bold cursor-pointer ${
+                        sourceInputMode === 'excel'
+                          ? 'bg-white text-blue-700 shadow-2xs'
+                          : 'text-slate-600'
+                      }`}
+                    >
+                      엑셀 / CSV 파일
                     </button>
                   </div>
                 </div>
@@ -833,7 +1079,7 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
                       <p className="text-xs text-rose-600 font-bold">{driveError}</p>
                     )}
 
-                    <div className="max-h-44 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 bg-white">
+                    <div className="max-h-36 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 bg-white">
                       {!accessToken ? (
                         <div className="p-4 text-center text-xs text-slate-500">
                           Google 로그인 후 드라이브 파일 목록을 불러올 수 있습니다.
@@ -854,7 +1100,10 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
                             <button
                               key={file.id}
                               type="button"
-                              onClick={() => setSelectedDriveFile(file)}
+                              onClick={() => {
+                                setSelectedDriveFile(file);
+                                handleInspectSource(file.id);
+                              }}
                               className={`w-full px-3 py-2 text-left flex items-center justify-between text-xs transition cursor-pointer ${
                                 isSelected
                                   ? 'bg-blue-50 text-blue-900 font-black'
@@ -872,9 +1121,9 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
                       )}
                     </div>
                   </div>
-                ) : (
-                  <div className="space-y-1.5">
-                    <div className="relative">
+                ) : sourceInputMode === 'url' ? (
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
                       <Link2 className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                       <input
                         type="text"
@@ -883,6 +1132,562 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
                         placeholder="https://docs.google.com/spreadsheets/d/... 또는 시트 ID"
                         className="w-full pl-8 pr-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold"
                       />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleInspectSource()}
+                      disabled={isInspectingSource || !externalUrlOrId.trim()}
+                      className="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl shrink-0 cursor-pointer disabled:opacity-40 flex items-center gap-1"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>컬럼 미리보기</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="p-3.5 border-2 border-dashed border-blue-300 rounded-xl bg-blue-50/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <div className="space-y-0.5 min-w-0">
+                      <div className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                        <Upload className="w-4 h-4 text-blue-600 shrink-0" />
+                        <span className="truncate">
+                          {excelFileName ? `선택된 파일: ${excelFileName} (${excelTabsData.length}개 탭)` : '내 PC의 .xlsx, .xls, .csv 가계부 파일 업로드'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        파일을 올리면 컬럼을 자동 분석하고, 아래에서 맞지 않는 열을 직접 매핑할 수 있습니다.
+                      </p>
+                    </div>
+                    <label className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-black rounded-xl cursor-pointer shrink-0 text-center">
+                      <span>{excelFileName ? '다른 파일 선택' : '파일 찾아보기'}</span>
+                      <input
+                        type="file"
+                        accept=".xlsx,.xls,.csv"
+                        onChange={handleExcelFileChange}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                )}
+
+                {isInspectingSource && (
+                  <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center gap-2 text-xs font-bold text-indigo-800">
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-600" />
+                    <span>원본 파일의 탭 목록과 컬럼 구조를 분석하는 중...</span>
+                  </div>
+                )}
+
+                {/* Column Mapping & Preview Panel */}
+                {inspection && !isInspectingSource && livePreviewParsed && (
+                  <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-1.5 text-xs font-black text-slate-900">
+                        <Sliders className="w-4 h-4 text-indigo-600" />
+                        <span>컬럼 호환 변환 설정 & 미리보기</span>
+                        <span className="text-[11px] font-bold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-md">
+                          기준 탭: {inspection.previewTabTitle}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setManualOverride({});
+                          const hasSplit =
+                            inspection.analysis.mapping.incomeCol !== undefined &&
+                            inspection.analysis.mapping.expenseCol !== undefined;
+                          setAmountColumnMode(hasSplit ? 'split' : 'single');
+                        }}
+                        className="text-[11px] font-bold text-slate-600 hover:text-slate-900 flex items-center gap-1 cursor-pointer"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>자동 인식으로 초기화</span>
+                      </button>
+                    </div>
+
+                    {/* Tab selection */}
+                    {inspection.allTabs.length > 0 && (
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="font-bold text-slate-700">
+                            가져올 원본 탭 ({selectedTabTitles.length}/{inspection.allTabs.length}개 선택)
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTabTitles(inspection.recommendedTabTitles)}
+                              className="text-blue-600 font-bold hover:underline cursor-pointer"
+                            >
+                              추천 탭만
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedTabTitles(inspection.allTabs.map((t) => t.title))
+                              }
+                              className="text-slate-600 font-bold hover:underline cursor-pointer"
+                            >
+                              전체 선택
+                            </button>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto">
+                          {inspection.allTabs.map((tab: ExternalSpreadsheetTabInfo) => {
+                            const checked = selectedTabTitles.includes(tab.title);
+                            return (
+                              <label
+                                key={tab.id}
+                                className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-bold border cursor-pointer transition ${
+                                  checked
+                                    ? 'bg-blue-600 text-white border-blue-700'
+                                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-100'
+                                }`}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() =>
+                                    setSelectedTabTitles((prev) =>
+                                      prev.includes(tab.title)
+                                        ? prev.filter((t) => t !== tab.title)
+                                        : [...prev, tab.title]
+                                    )
+                                  }
+                                  className="hidden"
+                                />
+                                <span>{tab.title}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Preview tab + Header row selector */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-0.5">
+                          미리보기 기준 탭 변경
+                        </label>
+                        <select
+                          value={inspection.previewTabTitle}
+                          onChange={(e) =>
+                            handleInspectSource(inspection.sourceSpreadsheetId, e.target.value, true)
+                          }
+                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold"
+                        >
+                          {inspection.allTabs.map((t) => (
+                            <option key={t.id} value={t.title}>
+                              {t.title}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] font-bold text-slate-600 mb-0.5">
+                          컬럼 제목(헤더)이 있는 행 번호
+                        </label>
+                        <select
+                          value={livePreviewParsed.headerRowIndex}
+                          onChange={(e) =>
+                            setManualOverride((prev) => ({
+                              ...prev,
+                              headerRowIndex: parseInt(e.target.value, 10),
+                            }))
+                          }
+                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold"
+                        >
+                          {inspection.rawRows.slice(0, 12).map((r, rIdx) => {
+                            const sample = (r || [])
+                              .filter((c) => String(c || '').trim() !== '')
+                              .slice(0, 4)
+                              .join(' · ');
+                            return (
+                              <option key={rIdx} value={rIdx}>
+                                {rIdx + 1}행 {sample ? `(${sample})` : '(빈 행)'}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Standard 9-column mapping dropdowns */}
+                    {(() => {
+                      const colCount = Math.max(
+                        livePreviewParsed.headers.length,
+                        ...(inspection.rawRows.slice(0, 10).map((r) => (r ? r.length : 0)))
+                      );
+                      const colIndexes = Array.from({ length: Math.min(26, Math.max(1, colCount)) }, (_, i) => i);
+                      const colLabel = (idx: number) => {
+                        const letter = String.fromCharCode(65 + idx);
+                        const hName = livePreviewParsed.headers[idx] || '';
+                        const sampleCell =
+                          inspection.rawRows[livePreviewParsed.headerRowIndex + 1]?.[idx] || '';
+                        return `${letter}열: ${hName || '(제목없음)'}${sampleCell ? ` [예: ${String(sampleCell).slice(0, 14)}]` : ''}`;
+                      };
+
+                      const eff = livePreviewParsed.effectiveMapping;
+                      const dateVal = manualOverride.dateCol ?? eff.dateCol;
+                      const catVal = manualOverride.categoryCol ?? eff.categoryCol;
+                      const descVal = manualOverride.descCol ?? eff.descCol;
+                      const typeVal = manualOverride.typeCol ?? (eff.typeCol ?? -1);
+                      const amtVal = manualOverride.amountCol ?? eff.amountCol;
+                      const incVal = manualOverride.incomeCol ?? (eff.incomeCol ?? -1);
+                      const expVal = manualOverride.expenseCol ?? (eff.expenseCol ?? -1);
+                      const pmVal = manualOverride.paymentMethodCol ?? (eff.paymentMethodCol ?? -1);
+                      const recVal = manualOverride.recurringTypeCol ?? (eff.recurringTypeCol ?? -1);
+                      const memoVal = manualOverride.memoCol ?? (eff.memoCol ?? -1);
+
+                      return (
+                        <div className="space-y-2 pt-1">
+                          <div className="flex items-center justify-between flex-wrap gap-2">
+                            <span className="text-[11px] font-black text-slate-700">
+                              표준 9컬럼 매핑 (다르게 인식된 열만 바꾸면 즉시 반영됩니다)
+                            </span>
+                            <div className="flex items-center gap-1 bg-white border border-slate-200 p-0.5 rounded-lg text-[11px]">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAmountColumnMode('single');
+                                  setManualOverride((prev) => ({
+                                    ...prev,
+                                    incomeCol: -1,
+                                    expenseCol: -1,
+                                    amountCol: amtVal >= 0 ? amtVal : 4,
+                                  }));
+                                }}
+                                className={`px-2 py-0.5 rounded font-bold cursor-pointer ${
+                                  amountColumnMode === 'single'
+                                    ? 'bg-blue-600 text-white'
+                                    : 'text-slate-600'
+                                }`}
+                              >
+                                단일 금액 열
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAmountColumnMode('split');
+                                  setManualOverride((prev) => ({
+                                    ...prev,
+                                    incomeCol: incVal >= 0 ? incVal : 3,
+                                    expenseCol: expVal >= 0 ? expVal : 4,
+                                  }));
+                                }}
+                                className={`px-2 py-0.5 rounded font-bold cursor-pointer ${
+                                  amountColumnMode === 'split'
+                                    ? 'bg-blue-600 text-white'
+                                    : 'text-slate-600'
+                                }`}
+                              >
+                                수입 / 지출 분리 열
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                            <div>
+                              <label className="font-bold text-slate-700 block mb-0.5">날짜 *</label>
+                              <select
+                                value={dateVal}
+                                onChange={(e) =>
+                                  setManualOverride((p) => ({
+                                    ...p,
+                                    dateCol: parseInt(e.target.value, 10),
+                                  }))
+                                }
+                                className="w-full p-1.5 bg-white border border-slate-300 rounded-lg font-medium"
+                              >
+                                {colIndexes.map((idx) => (
+                                  <option key={idx} value={idx}>
+                                    {colLabel(idx)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="font-bold text-slate-700 block mb-0.5">구분 (수입/지출)</label>
+                              <select
+                                value={typeVal}
+                                onChange={(e) =>
+                                  setManualOverride((p) => ({
+                                    ...p,
+                                    typeCol: parseInt(e.target.value, 10),
+                                  }))
+                                }
+                                className="w-full p-1.5 bg-white border border-slate-300 rounded-lg font-medium"
+                              >
+                                <option value={-1}>열 없음 (자동/탭명 판별)</option>
+                                {colIndexes.map((idx) => (
+                                  <option key={idx} value={idx}>
+                                    {colLabel(idx)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="font-bold text-slate-700 block mb-0.5">분류 (카테고리)</label>
+                              <select
+                                value={catVal}
+                                onChange={(e) =>
+                                  setManualOverride((p) => ({
+                                    ...p,
+                                    categoryCol: parseInt(e.target.value, 10),
+                                  }))
+                                }
+                                className="w-full p-1.5 bg-white border border-slate-300 rounded-lg font-medium"
+                              >
+                                <option value={-1}>열 없음 (&apos;기타&apos;로 지정)</option>
+                                {colIndexes.map((idx) => (
+                                  <option key={idx} value={idx}>
+                                    {colLabel(idx)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="font-bold text-slate-700 block mb-0.5">내용 / 사용처 *</label>
+                              <select
+                                value={descVal}
+                                onChange={(e) =>
+                                  setManualOverride((p) => ({
+                                    ...p,
+                                    descCol: parseInt(e.target.value, 10),
+                                  }))
+                                }
+                                className="w-full p-1.5 bg-white border border-slate-300 rounded-lg font-medium"
+                              >
+                                {colIndexes.map((idx) => (
+                                  <option key={idx} value={idx}>
+                                    {colLabel(idx)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {amountColumnMode === 'single' ? (
+                              <div>
+                                <label className="font-bold text-slate-700 block mb-0.5">금액 *</label>
+                                <select
+                                  value={amtVal}
+                                  onChange={(e) =>
+                                    setManualOverride((p) => ({
+                                      ...p,
+                                      amountCol: parseInt(e.target.value, 10),
+                                      incomeCol: -1,
+                                      expenseCol: -1,
+                                    }))
+                                  }
+                                  className="w-full p-1.5 bg-white border border-slate-300 rounded-lg font-medium"
+                                >
+                                  {colIndexes.map((idx) => (
+                                    <option key={idx} value={idx}>
+                                      {colLabel(idx)}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            ) : (
+                              <>
+                                <div>
+                                  <label className="font-bold text-emerald-700 block mb-0.5">수입 금액 열</label>
+                                  <select
+                                    value={incVal}
+                                    onChange={(e) =>
+                                      setManualOverride((p) => ({
+                                        ...p,
+                                        incomeCol: parseInt(e.target.value, 10),
+                                      }))
+                                    }
+                                    className="w-full p-1.5 bg-white border border-emerald-300 rounded-lg font-medium"
+                                  >
+                                    <option value={-1}>없음</option>
+                                    {colIndexes.map((idx) => (
+                                      <option key={idx} value={idx}>
+                                        {colLabel(idx)}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="font-bold text-rose-700 block mb-0.5">지출 금액 열</label>
+                                  <select
+                                    value={expVal}
+                                    onChange={(e) =>
+                                      setManualOverride((p) => ({
+                                        ...p,
+                                        expenseCol: parseInt(e.target.value, 10),
+                                      }))
+                                    }
+                                    className="w-full p-1.5 bg-white border border-rose-300 rounded-lg font-medium"
+                                  >
+                                    <option value={-1}>없음</option>
+                                    {colIndexes.map((idx) => (
+                                      <option key={idx} value={idx}>
+                                        {colLabel(idx)}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              </>
+                            )}
+
+                            <div>
+                              <label className="font-bold text-slate-700 block mb-0.5">결제수단</label>
+                              <select
+                                value={pmVal}
+                                onChange={(e) =>
+                                  setManualOverride((p) => ({
+                                    ...p,
+                                    paymentMethodCol: parseInt(e.target.value, 10),
+                                  }))
+                                }
+                                className="w-full p-1.5 bg-white border border-slate-300 rounded-lg font-medium"
+                              >
+                                <option value={-1}>없음 (비워둠)</option>
+                                {colIndexes.map((idx) => (
+                                  <option key={idx} value={idx}>
+                                    {colLabel(idx)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="font-bold text-slate-700 block mb-0.5">지출유형 (정/특)</label>
+                              <select
+                                value={recVal}
+                                onChange={(e) =>
+                                  setManualOverride((p) => ({
+                                    ...p,
+                                    recurringTypeCol: parseInt(e.target.value, 10),
+                                  }))
+                                }
+                                className="w-full p-1.5 bg-white border border-slate-300 rounded-lg font-medium"
+                              >
+                                <option value={-1}>없음</option>
+                                {colIndexes.map((idx) => (
+                                  <option key={idx} value={idx}>
+                                    {colLabel(idx)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <label className="font-bold text-slate-700 block mb-0.5">비고 / 메모</label>
+                              <select
+                                value={memoVal}
+                                onChange={(e) =>
+                                  setManualOverride((p) => ({
+                                    ...p,
+                                    memoCol: parseInt(e.target.value, 10),
+                                  }))
+                                }
+                                className="w-full p-1.5 bg-white border border-slate-300 rounded-lg font-medium"
+                              >
+                                <option value={-1}>없음</option>
+                                {colIndexes.map((idx) => (
+                                  <option key={idx} value={idx}>
+                                    {colLabel(idx)}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {typeVal === -1 && amountColumnMode === 'single' && (
+                              <div>
+                                <label className="font-bold text-slate-700 block mb-0.5">구분 기본 처리</label>
+                                <select
+                                  value={manualOverride.defaultTypeMode || 'auto'}
+                                  onChange={(e) =>
+                                    setManualOverride((p) => ({
+                                      ...p,
+                                      defaultTypeMode: e.target.value as 'auto' | 'expense' | 'income',
+                                    }))
+                                  }
+                                  className="w-full p-1.5 bg-white border border-slate-300 rounded-lg font-medium"
+                                >
+                                  <option value="auto">자동 판별 (분류/탭명)</option>
+                                  <option value="expense">모두 지출</option>
+                                  <option value="income">모두 수입</option>
+                                </select>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {/* Live 9-Column Conversion Preview Table */}
+                    <div className="space-y-1 pt-1">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="font-black text-slate-700">
+                          변환 결과 미리보기 (상위 {livePreviewParsed.transactions.length}건)
+                        </span>
+                        <span className="text-slate-500">
+                          이대로 [{importTabTitle}] 탭에 표준 저장됩니다
+                        </span>
+                      </div>
+                      {livePreviewParsed.transactions.length === 0 ? (
+                        <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-[11px] text-amber-800 font-bold">
+                          현재 설정으로 읽힌 거래 행이 없습니다. 위의 &lsquo;헤더 행 번호&rsquo;나 &lsquo;날짜/금액 열&rsquo;을 조정해 보세요.
+                        </div>
+                      ) : (
+                        <div className="overflow-x-auto border border-slate-200 rounded-lg bg-white">
+                          <table className="w-full text-left text-[11px] border-collapse">
+                            <thead className="bg-slate-800 text-white">
+                              <tr>
+                                <th className="px-2 py-1 font-bold">날짜</th>
+                                <th className="px-2 py-1 font-bold">구분</th>
+                                <th className="px-2 py-1 font-bold">분류</th>
+                                <th className="px-2 py-1 font-bold">내용/사용처</th>
+                                <th className="px-2 py-1 font-bold text-right">금액</th>
+                                <th className="px-2 py-1 font-bold">결제수단</th>
+                                <th className="px-2 py-1 font-bold">비고</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {livePreviewParsed.transactions.map((tx) => (
+                                <tr key={tx.id} className="hover:bg-slate-50">
+                                  <td className="px-2 py-1 font-mono text-slate-700 whitespace-nowrap">
+                                    {tx.date}
+                                  </td>
+                                  <td className="px-2 py-1 whitespace-nowrap">
+                                    <span
+                                      className={`font-bold ${
+                                        tx.type === 'income'
+                                          ? 'text-emerald-700'
+                                          : tx.type === 'transfer'
+                                          ? 'text-indigo-700'
+                                          : 'text-rose-700'
+                                      }`}
+                                    >
+                                      {tx.type === 'income' ? '수입' : tx.type === 'transfer' ? '이체' : '지출'}
+                                    </span>
+                                  </td>
+                                  <td className="px-2 py-1 text-slate-700 whitespace-nowrap">
+                                    {tx.category}
+                                  </td>
+                                  <td className="px-2 py-1 text-slate-900 font-medium max-w-[150px] truncate">
+                                    {tx.description}
+                                  </td>
+                                  <td className="px-2 py-1 text-right font-bold text-slate-900 whitespace-nowrap">
+                                    {tx.amount.toLocaleString('ko-KR')}원
+                                  </td>
+                                  <td className="px-2 py-1 text-slate-600 whitespace-nowrap">
+                                    {tx.paymentMethod || '-'}
+                                  </td>
+                                  <td className="px-2 py-1 text-slate-500 max-w-[100px] truncate">
+                                    {tx.memo || '-'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}

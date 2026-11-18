@@ -532,6 +532,45 @@ export function extractYearMatrixData(rows: string[][]): YearDashboardData | nul
   };
 }
 
+export interface ExternalImportOptions {
+  headerRowIndex?: number;
+  dateCol?: number;
+  typeCol?: number; // -1 means none
+  defaultTypeMode?: 'auto' | 'expense' | 'income';
+  categoryCol?: number; // -1 means none
+  subCategoryCol?: number; // -1 means none
+  descCol?: number; // -1 means none
+  merchantCol?: number; // -1 means none
+  itemCol?: number; // -1 means none
+  amountCol?: number; // -1 means none
+  incomeCol?: number; // -1 means none
+  expenseCol?: number; // -1 means none
+  paymentMethodCol?: number; // -1 means none
+  recurringTypeCol?: number; // -1 means none
+  subItemsCol?: number; // -1 means none
+  memoCol?: number; // -1 means none
+  skipMatrixGuard?: boolean;
+}
+
+export interface ExternalSpreadsheetTabInfo {
+  id: number;
+  title: string;
+  isMonthTab: boolean;
+  isSummaryLike: boolean;
+  recommended: boolean;
+}
+
+export interface ExternalSpreadsheetInspection {
+  sourceSpreadsheetId: string;
+  sourceSpreadsheetTitle: string;
+  allTabs: ExternalSpreadsheetTabInfo[];
+  recommendedTabTitles: string[];
+  previewTabTitle: string;
+  rawRows: string[][];
+  analysis: SheetAnalysisResult;
+  sampleTransactions: Transaction[];
+}
+
 /**
  * Analyze sheet rows to detect header structure, columns, categories, and payment methods
  */
@@ -540,7 +579,8 @@ export function analyzeSheetStructure(
   spreadsheetTitle: string,
   sheetTabs: Array<{ id: number; title: string }>,
   activeSheetTitle: string,
-  rows: string[][]
+  rows: string[][],
+  options?: ExternalImportOptions
 ): { analysis: SheetAnalysisResult; transactions: Transaction[] } {
   if (!rows || rows.length === 0) {
     const defaultMapping: ColumnMapping = {
@@ -573,7 +613,7 @@ export function analyzeSheetStructure(
   }
 
   // Detect if this sheet is an Annual Matrix Dashboard instead of an itemized transaction sheet
-  if (isAnnualMatrixSheet(rows, activeSheetTitle)) {
+  if (!options?.skipMatrixGuard && options?.headerRowIndex === undefined && isAnnualMatrixSheet(rows, activeSheetTitle)) {
     const defaultMapping: ColumnMapping = {
       dateCol: 0,
       categoryCol: 0,
@@ -616,22 +656,26 @@ export function analyzeSheetStructure(
     '메모', '비고', 'memo', 'note', '비고란',
   ];
 
-  for (let r = 0; r < Math.min(rows.length, 30); r++) {
-    const row = rows[r];
-    if (!row || row.length === 0) continue;
+  if (typeof options?.headerRowIndex === 'number' && options.headerRowIndex >= 0 && options.headerRowIndex < rows.length) {
+    bestHeaderRowIndex = options.headerRowIndex;
+  } else {
+    for (let r = 0; r < Math.min(rows.length, 30); r++) {
+      const row = rows[r];
+      if (!row || row.length === 0) continue;
 
-    let matches = 0;
-    for (const cell of row) {
-      const text = String(cell || '').trim().toLowerCase();
-      if (!text) continue;
-      if (headerKeywords.some((kw) => text.includes(kw))) {
-        matches++;
+      let matches = 0;
+      for (const cell of row) {
+        const text = String(cell || '').trim().toLowerCase();
+        if (!text) continue;
+        if (headerKeywords.some((kw) => text.includes(kw))) {
+          matches++;
+        }
       }
-    }
 
-    if (matches > maxHeaderMatches) {
-      maxHeaderMatches = matches;
-      bestHeaderRowIndex = r;
+      if (matches > maxHeaderMatches) {
+        maxHeaderMatches = matches;
+        bestHeaderRowIndex = r;
+      }
     }
   }
 
@@ -660,68 +704,69 @@ export function analyzeSheetStructure(
       .replace(/[\s_\-\/\(\)\[\],.:;]/g, '')
   );
 
-  cleanHeaders.forEach((clean, idx) => {
+  cleanHeaders.forEach((cleanRaw, idx) => {
+    const clean = cleanRaw.replace(/(?:원|krw)$/g, '');
     // 0. Expense Type (지출유형 / 정기특별 / 정특)
-    if (recurringTypeCol === -1 && /^(지출유형|지출구분|비용구분|정기특별|정특|예산유형|고정특별|expensetype)$/.test(clean)) {
+    if (recurringTypeCol === -1 && /^(지출유형|지출구분|비용구분|정기특별|정특|예산유형|고정특별|정기여부|고정여부|고정변동|expensetype)$/.test(cleanRaw)) {
       recurringTypeCol = idx;
     }
     // 0. Sub-items (세부품목 / 상세품목 / 품목상세 / 세부항목 / 상세항목 / 세부내역 / 상세내역 / 품목내역 / 품목세부 / 세부내용 / 상세내용 / 세부 / 상세)
     else if (
       subItemsCol === -1 &&
-      /^(세부품목|상세품목|품목상세|세부항목|상세항목|세부내역|상세내역|품목내역|품목세부|세부내용|상세내용|세부|상세|subitems?|sub_items?)$/i.test(clean)
+      /^(세부품목|상세품목|품목상세|세부항목|상세항목|세부내역|상세내역|품목내역|품목세부|세부내용|상세내용|세부|상세|subitems?|sub_items?)$/i.test(cleanRaw)
     ) {
       subItemsCol = idx;
     }
     // 1. Date
-    else if (dateCol === -1 && /^(날짜|일자|일시|date|거래일|일|월일|거래일자)$/.test(clean)) {
+    else if (dateCol === -1 && /^(날짜|일자|일시|date|거래일|일|월일|거래일자|거래날짜|결제일|결제일자|사용일|사용일자|지출일|지출일자|승인일|승인일자|날짜요일)$/.test(cleanRaw)) {
       dateCol = idx;
     }
-    // 2. Type (구분 / 입출)
-    else if (typeCol === -1 && /^(구분|유형|종류|입출|수지|type)$/.test(clean)) {
+    // 2. Type (구분 / 입출 / 수입지출)
+    else if (typeCol === -1 && /^(구분|유형|종류|입출|수지|수입지출|입출금|거래구분|수입지출구분|입출구분|수지구분|type)$/.test(cleanRaw)) {
       typeCol = idx;
     }
     // 3. Primary Category (대분류 / 분류 / 카테고리)
-    else if (categoryCol === -1 && /^(분류|카테고리|대분류|지출항목|지출분류|카테고리명|category)$/.test(clean)) {
+    else if (categoryCol === -1 && /^(분류|카테고리|대분류|주분류|대카테고리|분류명|지출항목|지출분류|수입분류|항목분류|카테고리명|category)$/.test(cleanRaw)) {
       categoryCol = idx;
     }
     // 4. Sub-category (소분류 / 중분류)
-    else if (subCategoryCol === -1 && /^(소분류|중분류|세부분류)$/.test(clean)) {
+    else if (subCategoryCol === -1 && /^(소분류|중분류|세부분류|세부카테고리|소분류명|중분류명)$/.test(cleanRaw)) {
       subCategoryCol = idx;
     }
     // 5. Combined Description + Merchant (내용사용처, 사용처내용, 내역사용처, 사용처내역)
-    else if (descCol === -1 && /^(내용사용처|사용처내용|내역사용처|사용처내역|상세내역|내용및사용처)$/.test(clean)) {
+    else if (descCol === -1 && /^(내용사용처|사용처내용|내역사용처|사용처내역|상세내역|내용및사용처|내역및사용처|적요및사용처)$/.test(cleanRaw)) {
       descCol = idx;
     }
     // 6. Merchant / Store (사용처, 가맹점, 상호, 상호명, 가맹점명, 거래처, 거래처명, 지출처, 구입처, 구매처, 결제처, 판매처, 매장)
-    else if (merchantCol === -1 && /^(사용처|가맹점|상호|상호명|가맹점명|거래처|거래처명|지출처|구입처|구매처|결제처|판매처|매장|매장명|merchant|store|vendor)$/.test(clean)) {
+    else if (merchantCol === -1 && /^(사용처|가맹점|가맹점상호|이용가맹점|이용처|상호|상호명|가맹점명|거래처|거래처명|지출처|구입처|구매처|결제처|결제상호|판매처|매장|매장명|merchant|store|vendor)$/.test(cleanRaw)) {
       merchantCol = idx;
     }
     // 7. Item / Content (내용, 품명, 품목, 적요, 내역, 지출내역, 사용내역, 거래내역, 지출내용, 품목명, 적요란)
     else if (
       itemCol === -1 &&
-      !/(세부|상세품목|세부항목|상세항목|품목상세|품목세부)/i.test(clean) &&
-      /^(내용|품명|품목|적요|내역|지출내역|사용내역|거래내역|지출내용|품목명|적요란|item|description|detail|details)$/.test(clean)
+      !/(세부|상세품목|세부항목|상세항목|품목상세|품목세부)/i.test(cleanRaw) &&
+      /^(내용|품명|품목|적요|내역|지출내역|사용내역|거래내역|지출내용|사용내용|내역내용|거래내용|이용내역|품목명|적요란|item|description|detail|details)$/.test(cleanRaw)
     ) {
       itemCol = idx;
     }
     // 8. Income
-    else if (incomeCol === -1 && /^(수입|입금|income|수입액|입금액)$/.test(clean)) {
+    else if (incomeCol === -1 && /^(수입|입금|income|수입액|수입금액|입금액|입금금액|수입금)$/.test(clean)) {
       incomeCol = idx;
     }
     // 9. Expense
-    else if (expenseCol === -1 && /^(지출|출금|expense|지출액|출금액)$/.test(clean)) {
+    else if (expenseCol === -1 && /^(지출|출금|expense|지출액|출금액|출금금액|지출금)$/.test(clean)) {
       expenseCol = idx;
     }
     // 10. Amount
-    else if (amountCol === -1 && /^(금액|사용금액|결제금액|합계|지출금액|amount|price|total)$/.test(clean)) {
+    else if (amountCol === -1 && /^(금액|사용금액|결제금액|이용금액|합계|지출금액|거래금액|결제액|amount|price|total)$/.test(clean)) {
       amountCol = idx;
     }
     // 11. Payment Method
-    else if (paymentMethodCol === -1 && /^(결제수단|결제방법|결제방식|수단|결제|지불|카드|계좌|payment|method)$/.test(clean)) {
+    else if (paymentMethodCol === -1 && /^(결제수단|결제방법|결제방식|결제수단명|결제카드|카드명|카드사|은행카드|사용카드|이용카드|결제계좌|지불수단|지불방법|수단|결제|지불|카드|계좌|payment|method)$/.test(cleanRaw)) {
       paymentMethodCol = idx;
     }
     // 12. Memo
-    else if (memoCol === -1 && /^(메모|비고|비고란|참고|memo|note|remark|특이사항)$/.test(clean)) {
+    else if (memoCol === -1 && /^(메모|비고|비고란|참고|메모비고|비고메모|기타메모|상세메모|memo|note|remark|특이사항)$/.test(cleanRaw)) {
       memoCol = idx;
     }
   });
@@ -741,7 +786,7 @@ export function analyzeSheetStructure(
   cleanHeaders.forEach((clean, idx) => {
     if (idx === dateCol || idx === typeCol || idx === amountCol || idx === incomeCol || idx === expenseCol || idx === categoryCol || idx === subItemsCol) return;
 
-    if (recurringTypeCol === -1 && /(지출유형|지출구분|정기.*특별|정.*특)/.test(clean)) {
+    if (recurringTypeCol === -1 && /(지출유형|지출구분|정기.*특별|정.*특|고정여부|정기여부)/.test(clean)) {
       recurringTypeCol = idx;
     }
     if (
@@ -764,6 +809,12 @@ export function analyzeSheetStructure(
     }
     if (categoryCol === -1 && /(분류|카테고리|항목)/.test(clean) && idx !== merchantCol && idx !== itemCol && idx !== subItemsCol) {
       categoryCol = idx;
+    }
+    if (paymentMethodCol === -1 && /(결제|카드|계좌|페이)/.test(clean) && idx !== amountCol && idx !== incomeCol && idx !== expenseCol) {
+      paymentMethodCol = idx;
+    }
+    if (memoCol === -1 && /(메모|비고|참고)/.test(clean)) {
+      memoCol = idx;
     }
   });
 
@@ -863,6 +914,34 @@ export function analyzeSheetStructure(
     }
   }
 
+  // Apply explicit column overrides when provided by user (e.g. external 2025 import mapping UI)
+  if (options) {
+    if (options.dateCol !== undefined && options.dateCol >= 0) dateCol = options.dateCol;
+    if (options.typeCol !== undefined) typeCol = options.typeCol;
+    if (options.categoryCol !== undefined) categoryCol = options.categoryCol;
+    if (options.subCategoryCol !== undefined) subCategoryCol = options.subCategoryCol;
+    if (options.descCol !== undefined) {
+      descCol = options.descCol;
+      if (options.merchantCol === undefined) merchantCol = -1;
+      if (options.itemCol === undefined) itemCol = -1;
+    }
+    if (options.merchantCol !== undefined) merchantCol = options.merchantCol;
+    if (options.itemCol !== undefined) itemCol = options.itemCol;
+    if (options.amountCol !== undefined) {
+      amountCol = options.amountCol;
+      if (options.incomeCol === undefined && options.expenseCol === undefined) {
+        incomeCol = -1;
+        expenseCol = -1;
+      }
+    }
+    if (options.incomeCol !== undefined) incomeCol = options.incomeCol;
+    if (options.expenseCol !== undefined) expenseCol = options.expenseCol;
+    if (options.paymentMethodCol !== undefined) paymentMethodCol = options.paymentMethodCol;
+    if (options.memoCol !== undefined) memoCol = options.memoCol;
+    if (options.recurringTypeCol !== undefined) recurringTypeCol = options.recurringTypeCol;
+    if (options.subItemsCol !== undefined) subItemsCol = options.subItemsCol;
+  }
+
   const mapping: ColumnMapping = {
     dateCol,
     typeCol: typeCol !== -1 ? typeCol : undefined,
@@ -896,14 +975,17 @@ export function analyzeSheetStructure(
       return; // Skip empty rows
     }
 
-    const rawDate = row[dateCol] ? String(row[dateCol]).trim() : '';
-    const rawCategory =
-      categoryCol !== -1 && row[categoryCol] ? String(row[categoryCol]).trim() : '기타';
+    const rawDate = dateCol >= 0 && row[dateCol] ? String(row[dateCol]).trim() : '';
+    const rawPrimaryCat =
+      categoryCol >= 0 && row[categoryCol] ? String(row[categoryCol]).trim() : '';
+    const rawSubCat =
+      subCategoryCol >= 0 && row[subCategoryCol] ? String(row[subCategoryCol]).trim() : '';
+    const rawCategory = rawPrimaryCat || rawSubCat || '기타';
 
     // Extract merchant and item text with priority
-    const merchantText = merchantCol !== -1 && row[merchantCol] ? String(row[merchantCol]).trim() : '';
-    const itemText = itemCol !== -1 && row[itemCol] ? String(row[itemCol]).trim() : '';
-    const descText = descCol !== -1 && row[descCol] ? String(row[descCol]).trim() : '';
+    const merchantText = merchantCol >= 0 && row[merchantCol] ? String(row[merchantCol]).trim() : '';
+    const itemText = itemCol >= 0 && row[itemCol] ? String(row[itemCol]).trim() : '';
+    const descText = descCol >= 0 && row[descCol] ? String(row[descCol]).trim() : '';
 
     let rawDesc = '';
     if (merchantText && itemText && merchantText !== itemText) {
@@ -917,12 +999,12 @@ export function analyzeSheetStructure(
     }
 
     const rawPayment =
-      paymentMethodCol !== -1 && row[paymentMethodCol] ? String(row[paymentMethodCol]).trim() : '';
-    const rawMemo = memoCol !== -1 && row[memoCol] ? String(row[memoCol]).trim() : '';
+      paymentMethodCol >= 0 && row[paymentMethodCol] ? String(row[paymentMethodCol]).trim() : '';
+    const rawMemo = memoCol >= 0 && row[memoCol] ? String(row[memoCol]).trim() : '';
     const rawRecurringType =
-      recurringTypeCol !== -1 && row[recurringTypeCol] ? String(row[recurringTypeCol]).trim() : '';
+      recurringTypeCol >= 0 && row[recurringTypeCol] ? String(row[recurringTypeCol]).trim() : '';
     const rawSubItemsText =
-      subItemsCol !== -1 && row[subItemsCol] ? String(row[subItemsCol]).trim() : '';
+      subItemsCol >= 0 && row[subItemsCol] ? String(row[subItemsCol]).trim() : '';
 
     // Smart fallback only if rawDesc is completely empty: search other candidate text cells
     // (Note: Pure numbers like "1", "100", "010" are completely valid user item descriptions and must never be discarded)
@@ -969,21 +1051,21 @@ export function analyzeSheetStructure(
     ) {
       let foundAlt = '';
       if (
-        descCol !== -1 &&
+        descCol >= 0 &&
         row[descCol] &&
         !String(row[descCol]).includes('[정기예산]') &&
         !String(row[descCol]).includes('[특별지출]')
       ) {
         foundAlt = String(row[descCol]).trim();
       } else if (
-        itemCol !== -1 &&
+        itemCol >= 0 &&
         row[itemCol] &&
         !String(row[itemCol]).includes('[정기예산]') &&
         !String(row[itemCol]).includes('[특별지출]')
       ) {
         foundAlt = String(row[itemCol]).trim();
       } else if (
-        merchantCol !== -1 &&
+        merchantCol >= 0 &&
         row[merchantCol] &&
         !String(row[merchantCol]).includes('[정기예산]') &&
         !String(row[merchantCol]).includes('[특별지출]')
@@ -1000,14 +1082,20 @@ export function analyzeSheetStructure(
     }
 
     // Determine Amount & Type
-    let type: TransactionType = 'expense';
+    const inferredTabIncome =
+      options?.defaultTypeMode === 'income' ||
+      (options?.defaultTypeMode !== 'expense' &&
+        /(수입|입금|income)/i.test(activeSheetTitle) &&
+        !/(지출|출금|expense)/i.test(activeSheetTitle));
+
+    let type: TransactionType = inferredTabIncome ? 'income' : 'expense';
     let amount = 0;
 
     if (mapping.incomeCol !== undefined && mapping.expenseCol !== undefined) {
       const incStr = row[mapping.incomeCol] ? String(row[mapping.incomeCol]).replace(/[^0-9.-]/g, '') : '';
       const expStr = row[mapping.expenseCol] ? String(row[mapping.expenseCol]).replace(/[^0-9.-]/g, '') : '';
-      const incVal = parseFloat(incStr) || 0;
-      const expVal = parseFloat(expStr) || 0;
+      const incVal = Math.abs(parseFloat(incStr) || 0);
+      const expVal = Math.abs(parseFloat(expStr) || 0);
 
       if (incVal > 0 && expVal === 0) {
         type = 'income';
@@ -1016,23 +1104,29 @@ export function analyzeSheetStructure(
         type = 'expense';
         amount = expVal || incVal;
       }
+    } else if (mapping.incomeCol !== undefined && mapping.expenseCol === undefined && amountCol < 0) {
+      const incStr = row[mapping.incomeCol] ? String(row[mapping.incomeCol]).replace(/[^0-9.-]/g, '') : '0';
+      amount = Math.abs(parseFloat(incStr) || 0);
+      type = 'income';
     } else {
-      const rawAmtStr = row[amountCol] ? String(row[amountCol]).replace(/[^0-9.-]/g, '') : '0';
+      const amtIdx = amountCol >= 0 ? amountCol : (expenseCol >= 0 ? expenseCol : -1);
+      const rawAmtStr = amtIdx >= 0 && row[amtIdx] ? String(row[amtIdx]).replace(/[^0-9.-]/g, '') : '0';
       const parsedAmt = parseFloat(rawAmtStr) || 0;
       amount = Math.abs(parsedAmt);
 
-      if (typeCol !== -1 && row[typeCol]) {
+      if (typeCol >= 0 && row[typeCol]) {
         const tStr = String(row[typeCol]).trim().toLowerCase();
         if (/수입|입금|급여|월급|income/.test(tStr)) {
           type = 'income';
         } else if (/이체|대체|저축|transfer/.test(tStr)) {
           type = 'transfer';
-        } else {
+        } else if (/지출|출금|사용|결제|expense/.test(tStr)) {
           type = 'expense';
         }
       } else if (parsedAmt < 0) {
         type = 'expense';
       } else if (
+        inferredTabIncome ||
         /^(수입|급여|월급|보너스|상여|상여금|용돈수입|이자수입|이자|배당|환급|부수입|지원금|성과급|퇴직금)$/.test(
           rawCategory.replace(/\s+/g, '')
         )
@@ -2893,7 +2987,7 @@ export function normalizeDateString(
   contextYear: number = 2026
 ): string | null {
   if (raw === null || raw === undefined) return null;
-  const str = String(raw).trim();
+  let str = String(raw).trim();
   if (!str) return null;
   const curYear = contextYear || 2026;
 
@@ -2918,6 +3012,18 @@ export function normalizeDateString(
         return date.toISOString().slice(0, 10);
       }
     }
+  }
+
+  // Strip trailing weekday tags "(월)", "[화]", "수요일" & timestamps "14:30:00", "오전 9:10"
+  str = str
+    .replace(/\s*(?:오전|오후|AM|PM)?\s*\d{1,2}:\d{2}(?::\d{2})?.*$/i, '')
+    .replace(/\s*[\(\[]?\s*(?:월|화|수|목|금|토|일)(?:요일)?\s*[\)\]]?\s*$/g, '')
+    .trim();
+
+  // 2b. Compact 8-digit YYYYMMDD (common in Korean bank/card downloads)
+  const compactYmd = str.match(/^(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])$/);
+  if (compactYmd) {
+    return `${compactYmd[1]}-${compactYmd[2]}-${compactYmd[3]}`;
   }
 
   // 3. Korean date formats: "2026년 10월 15일", "2026년 1월 5일", "26년 1월 5일"
@@ -3907,13 +4013,127 @@ export interface ImportExternalYearResult {
   sourceTabLogs: ConsolidationMonthLog[];
 }
 
+const SUMMARY_LIKE_TAB_REGEX = /dashboard|대시보드|요약|matrix|연간|분류설정|분류관리|기준|카테고리|통계|차트|결산|설정|사용설명서|설명서/i;
+
+export function classifyExternalTabs(
+  sourceTabs: Array<{ id: number; title: string }>,
+  targetYear: number
+): { allTabs: ExternalSpreadsheetTabInfo[]; recommendedTabTitles: string[] } {
+  const allTabs: ExternalSpreadsheetTabInfo[] = (sourceTabs || []).map((t) => {
+    const isMonthTab = extractMonthNumberFromTab(t.title) !== null;
+    const isSummaryLike = SUMMARY_LIKE_TAB_REGEX.test(t.title);
+    return {
+      id: t.id,
+      title: t.title,
+      isMonthTab,
+      isSummaryLike,
+      recommended: false,
+    };
+  });
+
+  const monthTabs = allTabs
+    .filter((t) => t.isMonthTab)
+    .sort((a, b) => (extractMonthNumberFromTab(a.title) || 99) - (extractMonthNumberFromTab(b.title) || 99));
+  const matchingYearTab = findTabForYear(sourceTabs, targetYear);
+  const nonSummaryExtraTabs = allTabs.filter((t) => !t.isSummaryLike && !t.isMonthTab);
+
+  let recommended: ExternalSpreadsheetTabInfo[] = [];
+  if (monthTabs.length > 0) {
+    recommended = [...monthTabs];
+    // Include separate non-summary tabs like "수입", "고정지출" if user also keeps them alongside 1월~12월
+    const extraTxTabs = nonSummaryExtraTabs.filter((t) =>
+      /(수입|입금|지출|내역|고정|현금|카드)/i.test(t.title)
+    );
+    for (const extra of extraTxTabs) {
+      if (!recommended.some((r) => r.id === extra.id)) {
+        recommended.push(extra);
+      }
+    }
+  } else if (matchingYearTab) {
+    const found = allTabs.find((t) => t.id === matchingYearTab.id);
+    if (found) recommended = [found];
+  } else if (nonSummaryExtraTabs.length > 0) {
+    recommended = nonSummaryExtraTabs;
+  } else {
+    recommended = allTabs;
+  }
+
+  const recSet = new Set(recommended.map((t) => t.title));
+  for (const t of allTabs) {
+    t.recommended = recSet.has(t.title);
+  }
+
+  return {
+    allTabs,
+    recommendedTabTitles: recommended.map((t) => t.title),
+  };
+}
+
 /**
- * Import an external year's spreadsheet (e.g. "2025 가계부") into a unified year tab (e.g. "2025")
- * inside the current master spreadsheet. Supports both 1월~12월 source files and single-tab files!
+ * Inspect an external Google Spreadsheet's tabs, headers, and sample rows for preview & column mapping override
+ */
+export async function inspectExternalSpreadsheetForImport(params: {
+  sourceSpreadsheetId: string;
+  targetYear: number;
+  accessToken: string;
+  previewTabTitle?: string;
+  importOptions?: ExternalImportOptions;
+}): Promise<ExternalSpreadsheetInspection> {
+  const { sourceSpreadsheetId, targetYear, accessToken, previewTabTitle, importOptions } = params;
+  if (!accessToken) {
+    throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 필요합니다.');
+  }
+
+  const sourceMeta = await getSpreadsheetDetails(sourceSpreadsheetId, accessToken);
+  const sourceTabs = sourceMeta.sheets || [];
+  const { allTabs, recommendedTabTitles } = classifyExternalTabs(sourceTabs, targetYear);
+
+  const orderedCandidates = previewTabTitle
+    ? [previewTabTitle, ...recommendedTabTitles.filter((t) => t !== previewTabTitle)]
+    : [...recommendedTabTitles, ...allTabs.filter((t) => !t.recommended).map((t) => t.title)];
+
+  let chosenTabTitle = orderedCandidates[0] || sourceTabs[0]?.title || '';
+  let chosenRows: string[][] = [];
+
+  for (const tabTitle of orderedCandidates.slice(0, previewTabTitle ? 1 : 4)) {
+    const rows = await getSheetValues(sourceSpreadsheetId, tabTitle, accessToken, 'A:Z');
+    chosenTabTitle = tabTitle;
+    chosenRows = rows || [];
+    if (chosenRows.length > 1) break;
+  }
+
+  const parsed = analyzeSheetStructure(
+    sourceSpreadsheetId,
+    sourceMeta.title,
+    sourceTabs,
+    chosenTabTitle,
+    chosenRows,
+    { ...importOptions, skipMatrixGuard: true }
+  );
+
+  return {
+    sourceSpreadsheetId,
+    sourceSpreadsheetTitle: sourceMeta.title,
+    allTabs,
+    recommendedTabTitles,
+    previewTabTitle: chosenTabTitle,
+    rawRows: chosenRows.slice(0, 80),
+    analysis: parsed.analysis,
+    sampleTransactions: parsed.transactions.slice(0, 8),
+  };
+}
+
+/**
+ * Import an external year's spreadsheet (Google Sheet OR preloaded Excel/CSV tabs)
+ * into a unified year tab (e.g. "2025") inside the current master spreadsheet.
  */
 export async function importExternalSpreadsheetToYearTab(params: {
   targetSpreadsheetId: string;
-  sourceSpreadsheetId: string;
+  sourceSpreadsheetId?: string;
+  preloadedSourceTitle?: string;
+  preloadedTabsData?: Array<{ title: string; rows: string[][] }>;
+  selectedTabTitles?: string[];
+  importOptions?: ExternalImportOptions;
   targetYear: number;
   targetTabTitle?: string;
   mergeWithExisting?: boolean;
@@ -3922,7 +4142,11 @@ export async function importExternalSpreadsheetToYearTab(params: {
 }): Promise<ImportExternalYearResult> {
   const {
     targetSpreadsheetId,
-    sourceSpreadsheetId,
+    sourceSpreadsheetId = '',
+    preloadedSourceTitle,
+    preloadedTabsData,
+    selectedTabTitles,
+    importOptions,
     targetYear,
     targetTabTitle = String(targetYear),
     mergeWithExisting = true,
@@ -3937,35 +4161,40 @@ export async function importExternalSpreadsheetToYearTab(params: {
   onProgress?.({
     index: 1,
     total: 10,
-    message: `원본 스프레드시트 정보를 불러오는 중...`,
+    message: `원본 데이터 구조를 불러오는 중...`,
   });
 
-  const sourceMeta = await getSpreadsheetDetails(sourceSpreadsheetId, accessToken);
-  const sourceTabs = sourceMeta.sheets || [];
-
-  // Identify candidate data tabs in source spreadsheet
-  const monthTabs = sourceTabs.filter((t) => extractMonthNumberFromTab(t.title) !== null);
-  const matchingYearTab = findTabForYear(sourceTabs, targetYear);
-  const txNamedTabs = sourceTabs.filter(
-    (t) =>
-      !/dashboard|대시보드|요약|matrix|연간|분류설정|분류관리|분류|기준|카테고리|통계|차트|결산|설정|사용설명서|설명서/i.test(
-        t.title
-      ) && !monthTabs.some((m) => m.id === t.id)
-  );
-
+  let sourceSpreadsheetTitle = preloadedSourceTitle || `${targetYear}년 가계부`;
+  let sourceTabs: Array<{ id: number; title: string }> = [];
   let tabsToRead: Array<{ id: number; title: string }> = [];
-  if (monthTabs.length > 0) {
-    // Sort 1월..12월
-    tabsToRead = [...monthTabs].sort(
-      (a, b) => (extractMonthNumberFromTab(a.title) || 99) - (extractMonthNumberFromTab(b.title) || 99)
-    );
-    // Also include any year-named tab if it has additional data not in months? Usually either/or, prefer monthTabs.
-  } else if (matchingYearTab) {
-    tabsToRead = [matchingYearTab];
-  } else if (txNamedTabs.length > 0) {
-    tabsToRead = txNamedTabs;
+
+  if (preloadedTabsData && preloadedTabsData.length > 0) {
+    sourceTabs = preloadedTabsData.map((t, idx) => ({ id: idx + 1, title: t.title }));
+    if (selectedTabTitles && selectedTabTitles.length > 0) {
+      const selSet = new Set(selectedTabTitles);
+      tabsToRead = sourceTabs.filter((t) => selSet.has(t.title));
+    } else {
+      const { recommendedTabTitles } = classifyExternalTabs(sourceTabs, targetYear);
+      const recSet = new Set(recommendedTabTitles);
+      tabsToRead = sourceTabs.filter((t) => recSet.has(t.title));
+    }
   } else {
-    tabsToRead = sourceTabs;
+    if (!sourceSpreadsheetId) {
+      throw new Error('원본 스프레드시트 ID가 필요합니다.');
+    }
+    const sourceMeta = await getSpreadsheetDetails(sourceSpreadsheetId, accessToken);
+    sourceSpreadsheetTitle = sourceMeta.title;
+    sourceTabs = sourceMeta.sheets || [];
+
+    if (selectedTabTitles && selectedTabTitles.length > 0) {
+      const selSet = new Set(selectedTabTitles);
+      tabsToRead = sourceTabs.filter((t) => selSet.has(t.title));
+    } else {
+      const { recommendedTabTitles } = classifyExternalTabs(sourceTabs, targetYear);
+      const recSet = new Set(recommendedTabTitles);
+      tabsToRead = sourceTabs.filter((t) => recSet.has(t.title));
+      if (tabsToRead.length === 0) tabsToRead = sourceTabs;
+    }
   }
 
   const totalSteps = tabsToRead.length + 2;
@@ -3977,27 +4206,35 @@ export async function importExternalSpreadsheetToYearTab(params: {
     onProgress?.({
       index: i + 1,
       total: totalSteps,
-      message: `원본 [${tab.title}] 탭 읽는 중... (${i + 1}/${tabsToRead.length})`,
+      message: `원본 [${tab.title}] 탭 변환 중... (${i + 1}/${tabsToRead.length})`,
     });
 
     try {
-      const rows = await getSheetValues(sourceSpreadsheetId, tab.title, accessToken, 'A:Z');
+      const rows = preloadedTabsData
+        ? (preloadedTabsData.find((p) => p.title === tab.title)?.rows || [])
+        : await getSheetValues(sourceSpreadsheetId, tab.title, accessToken, 'A:Z');
+
       if (!rows || rows.length <= 1) {
         sourceTabLogs.push({ sourceTab: tab.title, count: 0, status: 'empty' });
         continue;
       }
 
-      if (isAnnualMatrixSheet(rows, tab.title)) {
+      if (
+        !importOptions?.skipMatrixGuard &&
+        importOptions?.headerRowIndex === undefined &&
+        isAnnualMatrixSheet(rows, tab.title)
+      ) {
         sourceTabLogs.push({ sourceTab: tab.title, count: 0, status: 'skipped' });
         continue;
       }
 
       const parsed = analyzeSheetStructure(
-        sourceSpreadsheetId,
+        sourceSpreadsheetId || 'local-excel',
         `${targetYear}년 가계부`,
         sourceTabs,
         tab.title,
-        rows
+        rows,
+        importOptions ? { ...importOptions, skipMatrixGuard: true } : undefined
       );
 
       // Guarantee year matches targetYear when year wasn't explicitly different in row
@@ -4086,7 +4323,7 @@ export async function importExternalSpreadsheetToYearTab(params: {
   setStoredLayoutMode(targetSpreadsheetId, 'yearly');
 
   return {
-    sourceSpreadsheetTitle: sourceMeta.title,
+    sourceSpreadsheetTitle,
     targetTabTitle,
     totalRowsWritten: merged.length,
     newlyAddedCount: addedCount,

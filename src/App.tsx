@@ -28,6 +28,8 @@ import {
   MonthMigrationResult,
   ConsolidationResult,
   ImportExternalYearResult,
+  ExternalImportOptions,
+  ExternalSpreadsheetInspection,
   OldMonthTabsAction,
   PERPETUAL_SUMMARY_TAB_TITLE,
   extractMonthNumberFromTab,
@@ -41,6 +43,7 @@ import {
   computeYearDashboardDataFromTransactions,
   consolidateMonthsIntoYearTab,
   importExternalSpreadsheetToYearTab,
+  inspectExternalSpreadsheetForImport,
 } from './services/googleSheets';
 import { listSpreadsheets } from './services/googleDrive';
 import { Header } from './components/Header';
@@ -2561,10 +2564,53 @@ export default function App() {
     [isRealGoogleConnected, spreadsheetId, ensureValidTokenOrLogin, loadSheetData]
   );
 
+  const handleInspectExternalFile = useCallback(
+    async (params: {
+      sourceSpreadsheetId: string;
+      targetYear: number;
+      previewTabTitle?: string;
+      importOptions?: ExternalImportOptions;
+    }): Promise<ExternalSpreadsheetInspection | null> => {
+      let token = await ensureValidTokenOrLogin();
+      if (!token) return null;
+
+      try {
+        return await inspectExternalSpreadsheetForImport({
+          sourceSpreadsheetId: params.sourceSpreadsheetId,
+          targetYear: params.targetYear,
+          accessToken: token,
+          previewTabTitle: params.previewTabTitle,
+          importOptions: params.importOptions,
+        });
+      } catch (err: any) {
+        if (isAuthExpiredError(err) || err?.message?.includes('AUTH_EXPIRED')) {
+          const loginRes = await googleSignIn();
+          if (loginRes?.accessToken) {
+            setAccessToken(loginRes.accessToken);
+            return await inspectExternalSpreadsheetForImport({
+              sourceSpreadsheetId: params.sourceSpreadsheetId,
+              targetYear: params.targetYear,
+              accessToken: loginRes.accessToken,
+              previewTabTitle: params.previewTabTitle,
+              importOptions: params.importOptions,
+            });
+          }
+          return null;
+        }
+        throw err;
+      }
+    },
+    [ensureValidTokenOrLogin]
+  );
+
   const handleImportExternalFile = useCallback(
     async (
       params: {
-        sourceSpreadsheetId: string;
+        sourceSpreadsheetId?: string;
+        preloadedSourceTitle?: string;
+        preloadedTabsData?: Array<{ title: string; rows: string[][] }>;
+        selectedTabTitles?: string[];
+        importOptions?: ExternalImportOptions;
         targetYear: number;
         targetTabTitle: string;
         mergeWithExisting: boolean;
@@ -2572,8 +2618,7 @@ export default function App() {
       onProgress: (info: { index: number; total: number; message: string }) => void
     ): Promise<ImportExternalYearResult | null> => {
       if (!isRealGoogleConnected || !spreadsheetId) {
-        alert('Google 시트가 연동되어 있지 않습니다.');
-        return null;
+        throw new Error('Google 시트가 연동되어 있지 않습니다. 먼저 상단에서 Google 로그인 및 시트를 연결해 주세요.');
       }
       let token = await ensureValidTokenOrLogin();
       if (!token) return null;
@@ -2582,6 +2627,10 @@ export default function App() {
         const res = await importExternalSpreadsheetToYearTab({
           targetSpreadsheetId: spreadsheetId,
           sourceSpreadsheetId: params.sourceSpreadsheetId,
+          preloadedSourceTitle: params.preloadedSourceTitle,
+          preloadedTabsData: params.preloadedTabsData,
+          selectedTabTitles: params.selectedTabTitles,
+          importOptions: params.importOptions,
           targetYear: params.targetYear,
           targetTabTitle: params.targetTabTitle,
           mergeWithExisting: params.mergeWithExisting,
@@ -2609,6 +2658,10 @@ export default function App() {
               const res = await importExternalSpreadsheetToYearTab({
                 targetSpreadsheetId: spreadsheetId,
                 sourceSpreadsheetId: params.sourceSpreadsheetId,
+                preloadedSourceTitle: params.preloadedSourceTitle,
+                preloadedTabsData: params.preloadedTabsData,
+                selectedTabTitles: params.selectedTabTitles,
+                importOptions: params.importOptions,
                 targetYear: params.targetYear,
                 targetTabTitle: params.targetTabTitle,
                 mergeWithExisting: params.mergeWithExisting,
@@ -3417,6 +3470,7 @@ export default function App() {
         activeYear={activeYear}
         onLogin={handleLogin}
         onConsolidateCurrentFile={handleConsolidateCurrentFile}
+        onInspectExternalFile={handleInspectExternalFile}
         onImportExternalFile={handleImportExternalFile}
         onRunColumnsMigration={handleRunMigrationAllMonths}
         isMigratingColumns={isMigratingAllMonths}
