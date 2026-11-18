@@ -550,6 +550,7 @@ export interface ExternalImportOptions {
   subItemsCol?: number; // -1 means none
   memoCol?: number; // -1 means none
   skipMatrixGuard?: boolean;
+  categoryRenameMap?: Record<string, string>;
 }
 
 export interface ExternalSpreadsheetTabInfo {
@@ -980,7 +981,12 @@ export function analyzeSheetStructure(
       categoryCol >= 0 && row[categoryCol] ? String(row[categoryCol]).trim() : '';
     const rawSubCat =
       subCategoryCol >= 0 && row[subCategoryCol] ? String(row[subCategoryCol]).trim() : '';
-    const rawCategory = rawPrimaryCat || rawSubCat || '기타';
+    const baseCategory = rawPrimaryCat || rawSubCat || '기타';
+    const renamedCat =
+      options?.categoryRenameMap && options.categoryRenameMap[baseCategory]
+        ? options.categoryRenameMap[baseCategory].trim()
+        : baseCategory;
+    const rawCategory = renamedCat || baseCategory;
 
     // Extract merchant and item text with priority
     const merchantText = merchantCol >= 0 && row[merchantCol] ? String(row[merchantCol]).trim() : '';
@@ -2281,6 +2287,63 @@ export async function updateTransactionRow(
   if (previousDate && transaction.date && previousDate !== transaction.date) {
     await sortSheetRowsByDate(spreadsheetId, sheetTitle, mapping.dateCol, accessToken, 'ASCENDING');
   }
+}
+
+/**
+ * Batch-update the category column for many rows at once using Google Sheets values:batchUpdate
+ * (avoids sequential 1-by-1 API calls and 429 rate-limit failures on large selections).
+ */
+export async function batchUpdateTransactionsCategoryInSheet(params: {
+  spreadsheetId: string;
+  defaultSheetTitle: string;
+  categoryColIndex: number;
+  rows: Array<{ sheetTitle?: string; rowIndex: number }>;
+  newCategory: string;
+  accessToken: string;
+}): Promise<number> {
+  const { spreadsheetId, defaultSheetTitle, categoryColIndex, rows, newCategory, accessToken } = params;
+  if (!accessToken) {
+    throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 필요합니다.');
+  }
+  const validRows = rows.filter((r) => typeof r.rowIndex === 'number' && r.rowIndex > 0);
+  if (validRows.length === 0 || categoryColIndex < 0) return 0;
+
+  const colLetter = getColumnLetter(categoryColIndex);
+  const CHUNK_SIZE = 400;
+
+  for (let i = 0; i < validRows.length; i += CHUNK_SIZE) {
+    const chunk = validRows.slice(i, i + CHUNK_SIZE);
+    const data = chunk.map((r) => ({
+      range: `'${r.sheetTitle || defaultSheetTitle}'!${colLetter}${r.rowIndex}`,
+      values: [[newCategory]],
+    }));
+
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          valueInputOption: 'USER_ENTERED',
+          data,
+        }),
+      }
+    );
+
+    if (res.status === 401) {
+      clearAuthSession();
+      throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 만료되었습니다. 다시 로그인해 주세요.');
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      throw new Error(err?.error?.message || '구글 시트 카테고리 일괄 수정 실패');
+    }
+  }
+
+  return validRows.length;
 }
 
 /**

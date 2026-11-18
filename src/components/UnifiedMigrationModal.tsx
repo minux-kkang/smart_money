@@ -19,6 +19,8 @@ import {
   Sliders,
   Eye,
   RotateCcw,
+  Trash2,
+  Tag,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import {
@@ -63,6 +65,7 @@ interface UnifiedMigrationModalProps {
     },
     onProgress: (info: { index: number; total: number; message: string }) => void
   ) => Promise<ConsolidationResult | null>;
+  onCleanupLegacyMonthTabs?: (action: 'hide' | 'delete') => Promise<number>;
   onInspectExternalFile?: (params: {
     sourceSpreadsheetId: string;
     targetYear: number;
@@ -82,6 +85,7 @@ interface UnifiedMigrationModalProps {
     },
     onProgress: (info: { index: number; total: number; message: string }) => void
   ) => Promise<ImportExternalYearResult | null>;
+  availableCategories?: string[];
   // Legacy 12-month column split handler
   onRunColumnsMigration: () => Promise<void>;
   isMigratingColumns: boolean;
@@ -107,8 +111,10 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
   activeYear = '2026',
   onLogin,
   onConsolidateCurrentFile,
+  onCleanupLegacyMonthTabs,
   onInspectExternalFile,
   onImportExternalFile,
+  availableCategories = [],
   onRunColumnsMigration,
   isMigratingColumns,
   columnsProgress,
@@ -195,6 +201,10 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
   const [selectedTabTitles, setSelectedTabTitles] = useState<string[]>([]);
   const [manualOverride, setManualOverride] = useState<ExternalImportOptions>({});
   const [amountColumnMode, setAmountColumnMode] = useState<'single' | 'split'>('single');
+  const [isCleaningMonthTabs, setIsCleaningMonthTabs] = useState<boolean>(false);
+  const [confirmDeleteMonthTabs, setConfirmDeleteMonthTabs] = useState<boolean>(false);
+  const [cleanupNotice, setCleanupNotice] = useState<string | null>(null);
+  const [isCategoryMapOpen, setIsCategoryMapOpen] = useState<boolean>(false);
 
   const detectedMonthTabs = useMemo(
     () =>
@@ -247,17 +257,34 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
     headerRowIndex: number;
     effectiveMapping: any;
     transactions: Transaction[];
+    sourceCategories: string[];
   } | null>(() => {
     if (!inspection || !inspection.rawRows || inspection.rawRows.length === 0) return null;
     const yearNum = parseInt(importYear.trim(), 10) || 2025;
-    const parsed = analyzeSheetStructure(
+    const { categoryRenameMap: _omit, ...baseOverride } = manualOverride;
+    const baseParsed = analyzeSheetStructure(
       inspection.sourceSpreadsheetId,
       `${yearNum}년 가계부`,
       inspection.allTabs.map((t) => ({ id: t.id, title: t.title })),
       inspection.previewTabTitle,
       inspection.rawRows,
-      { ...manualOverride, skipMatrixGuard: true }
+      { ...baseOverride, skipMatrixGuard: true }
     );
+    const sourceCategories = Array.from(
+      new Set(baseParsed.transactions.map((t) => t.category).filter(Boolean))
+    );
+
+    const parsed = manualOverride.categoryRenameMap
+      ? analyzeSheetStructure(
+          inspection.sourceSpreadsheetId,
+          `${yearNum}년 가계부`,
+          inspection.allTabs.map((t) => ({ id: t.id, title: t.title })),
+          inspection.previewTabTitle,
+          inspection.rawRows,
+          { ...manualOverride, skipMatrixGuard: true }
+        )
+      : baseParsed;
+
     const fixedTxs = parsed.transactions.slice(0, 5).map((tx) => {
       if (tx.date && /^\d{4}-\d{2}-\d{2}$/.test(tx.date)) {
         const y = parseInt(tx.date.slice(0, 4), 10);
@@ -272,12 +299,13 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
       headerRowIndex: parsed.analysis.mapping.headerRowIndex,
       effectiveMapping: parsed.analysis.mapping,
       transactions: fixedTxs,
+      sourceCategories,
     };
   }, [inspection, manualOverride, importYear]);
 
   if (!isOpen) return null;
 
-  const isBusy = isConsolidating || isImportingExternal || isMigratingColumns || isInspectingSource;
+  const isBusy = isConsolidating || isImportingExternal || isMigratingColumns || isInspectingSource || isCleaningMonthTabs;
 
   const extractSpreadsheetIdFromInput = (rawInput: string) => {
     const raw = rawInput.trim();
@@ -806,6 +834,94 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
                   </label>
                 </div>
               </div>
+
+              {/* Quick standalone cleanup for legacy monthly tabs when perpetual year tabs already exist */}
+              {isSheetLinked && existingYearTabs.length > 0 && detectedMonthTabs.length > 0 && onCleanupLegacyMonthTabs && (
+                <div className="p-3.5 bg-rose-50/70 border border-rose-200 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div>
+                      <div className="text-xs font-black text-rose-950 flex items-center gap-1.5">
+                        <Trash2 className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                        <span>
+                          이미 [{existingYearTabs.map((y) => y.title).join(', ')}] 통합 탭이 있습니다 · 남은 월별 시트 {detectedMonthTabs.length}개 정리
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-rose-800 mt-0.5">
+                        통합 시트 반영이 확인되었다면 더 이상 쓰지 않는 1월~12월 탭을 시트에서 바로 숨기거나 완전히 삭제할 수 있습니다.
+                      </p>
+                    </div>
+                    {!confirmDeleteMonthTabs ? (
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={async () => {
+                            setIsCleaningMonthTabs(true);
+                            setCleanupNotice(null);
+                            try {
+                              const cnt = await onCleanupLegacyMonthTabs('hide');
+                              setCleanupNotice(`월별 탭 ${cnt}개를 숨김 처리했습니다.`);
+                            } catch (e: any) {
+                              setConsolidateError(e?.message || '월별 탭 숨기기 실패');
+                            } finally {
+                              setIsCleaningMonthTabs(false);
+                            }
+                          }}
+                          className="px-2.5 py-1.5 bg-white hover:bg-slate-100 border border-slate-300 text-slate-700 rounded-lg text-[11px] font-bold cursor-pointer disabled:opacity-50"
+                        >
+                          숨기기
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => setConfirmDeleteMonthTabs(true)}
+                          className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[11px] font-black cursor-pointer disabled:opacity-50 flex items-center gap-1"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          <span>월별 탭 {detectedMonthTabs.length}개 완전 삭제</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => setConfirmDeleteMonthTabs(false)}
+                          className="px-2.5 py-1.5 bg-white border border-slate-300 text-slate-600 rounded-lg text-[11px] font-bold cursor-pointer"
+                        >
+                          취소
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={async () => {
+                            setIsCleaningMonthTabs(true);
+                            setCleanupNotice(null);
+                            try {
+                              const cnt = await onCleanupLegacyMonthTabs('delete');
+                              setConfirmDeleteMonthTabs(false);
+                              setCleanupNotice(`기존 1월~12월 시트 ${cnt}개를 구글 시트에서 완전히 삭제했습니다.`);
+                            } catch (e: any) {
+                              setConsolidateError(e?.message || '월별 탭 삭제 실패');
+                            } finally {
+                              setIsCleaningMonthTabs(false);
+                            }
+                          }}
+                          className="px-3 py-1.5 bg-rose-700 hover:bg-rose-800 text-white rounded-lg text-[11px] font-black cursor-pointer flex items-center gap-1"
+                        >
+                          {isCleaningMonthTabs ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+                          <span>확인: 지금 {detectedMonthTabs.length}개 삭제 실행</span>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {cleanupNotice && (
+                    <p className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5">
+                      {cleanupNotice}
+                    </p>
+                  )}
+                </div>
+              )}
 
               {consolidateError && (
                 <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-bold flex items-center gap-2">
@@ -1619,6 +1735,76 @@ export const UnifiedMigrationModal: React.FC<UnifiedMigrationModalProps> = ({
                         </div>
                       );
                     })()}
+
+                    {/* Optional Category Rename Mapping Rules */}
+                    {livePreviewParsed.sourceCategories.length > 0 && (
+                      <div className="border border-slate-200 rounded-lg bg-white overflow-hidden">
+                        <button
+                          type="button"
+                          onClick={() => setIsCategoryMapOpen((v) => !v)}
+                          className="w-full px-3 py-2 flex items-center justify-between text-[11px] font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                        >
+                          <span className="flex items-center gap-1.5">
+                            <Tag className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>
+                              원본 분류명 일괄 치환 ({Object.keys(manualOverride.categoryRenameMap || {}).length}개 적용 중 · 선택사항)
+                            </span>
+                          </span>
+                          <span className="text-indigo-600">{isCategoryMapOpen ? '접기 ▲' : '분류 맞추기 열기 ▼'}</span>
+                        </button>
+                        {isCategoryMapOpen && (
+                          <div className="p-2.5 border-t border-slate-100 space-y-2 bg-slate-50/50">
+                            <p className="text-[11px] text-slate-500">
+                              2025년의 옛날 분류 이름(예: 식사 → 식비)을 현재 분류로 한 번에 바꿔서 가져옵니다. 비워두면 원본 이름 그대로 저장됩니다.
+                            </p>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-36 overflow-y-auto">
+                              {livePreviewParsed.sourceCategories.map((srcCat) => {
+                                const currentTarget = (manualOverride.categoryRenameMap || {})[srcCat] || '';
+                                return (
+                                  <div
+                                    key={srcCat}
+                                    className="flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1 text-[11px]"
+                                  >
+                                    <span className="font-bold text-slate-700 truncate min-w-0 flex-1" title={srcCat}>
+                                      {srcCat}
+                                    </span>
+                                    <span className="text-slate-400 shrink-0">→</span>
+                                    <input
+                                      type="text"
+                                      list="smart-money-target-categories"
+                                      value={currentTarget}
+                                      placeholder={srcCat}
+                                      onChange={(e) => {
+                                        const val = e.target.value;
+                                        setManualOverride((prev) => {
+                                          const nextMap = { ...(prev.categoryRenameMap || {}) };
+                                          if (!val.trim() || val.trim() === srcCat) {
+                                            delete nextMap[srcCat];
+                                          } else {
+                                            nextMap[srcCat] = val;
+                                          }
+                                          return {
+                                            ...prev,
+                                            categoryRenameMap:
+                                              Object.keys(nextMap).length > 0 ? nextMap : undefined,
+                                          };
+                                        });
+                                      }}
+                                      className="w-28 px-1.5 py-0.5 bg-slate-50 border border-slate-200 rounded text-[11px] font-bold text-indigo-700"
+                                    />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <datalist id="smart-money-target-categories">
+                              {availableCategories.map((c) => (
+                                <option key={c} value={c} />
+                              ))}
+                            </datalist>
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Live 9-Column Conversion Preview Table */}
                     <div className="space-y-1 pt-1">

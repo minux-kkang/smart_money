@@ -19,6 +19,7 @@ import {
   appendTransactionRow,
   appendBatchTransactions,
   updateTransactionRow,
+  batchUpdateTransactionsCategoryInSheet,
   deleteTransactionRow,
   deleteMultipleTransactionRows,
   addMonthlySheetTab,
@@ -44,6 +45,7 @@ import {
   consolidateMonthsIntoYearTab,
   importExternalSpreadsheetToYearTab,
   inspectExternalSpreadsheetForImport,
+  organizePerpetualSheetStructure,
 } from './services/googleSheets';
 import { listSpreadsheets } from './services/googleDrive';
 import { Header } from './components/Header';
@@ -1581,11 +1583,44 @@ export default function App() {
     try {
       let currentToken = accessToken;
       const validTxs = txs.filter((t) => typeof t.rowIndex === 'number' && t.rowIndex > 0);
+      const catColIdx = analysis?.mapping?.categoryCol ?? 2;
 
-      // Sequentially update each row to prevent Google Sheets 429 Write quota rate limits
-      for (const tx of validTxs) {
-        const txSheet = tx.sheetTitle || activeSheetTitle;
+      if (currentToken && validTxs.length > 0 && catColIdx >= 0) {
+        const rowsPayload = validTxs.map((t) => ({
+          sheetTitle: t.sheetTitle || activeSheetTitle,
+          rowIndex: t.rowIndex!,
+        }));
         try {
+          await batchUpdateTransactionsCategoryInSheet({
+            spreadsheetId,
+            defaultSheetTitle: activeSheetTitle,
+            categoryColIndex: catColIdx,
+            rows: rowsPayload,
+            newCategory,
+            accessToken: currentToken,
+          });
+        } catch (batchErr: any) {
+          if (batchErr?.message?.includes('AUTH_EXPIRED') || String(batchErr).includes('AUTH_EXPIRED')) {
+            const newToken = await refreshGoogleToken();
+            if (newToken) {
+              currentToken = newToken;
+              setAccessToken(newToken);
+              await batchUpdateTransactionsCategoryInSheet({
+                spreadsheetId,
+                defaultSheetTitle: activeSheetTitle,
+                categoryColIndex: catColIdx,
+                rows: rowsPayload,
+                newCategory,
+                accessToken: newToken,
+              });
+            }
+          } else {
+            throw batchErr;
+          }
+        }
+      } else {
+        for (const tx of validTxs) {
+          const txSheet = tx.sheetTitle || activeSheetTitle;
           await updateTransactionRow(
             spreadsheetId,
             txSheet,
@@ -1594,24 +1629,6 @@ export default function App() {
             { ...tx, category: newCategory },
             currentToken
           );
-        } catch (rowErr: any) {
-          if (rowErr?.message?.includes('AUTH_EXPIRED') || String(rowErr).includes('AUTH_EXPIRED')) {
-            const newToken = await refreshGoogleToken();
-            if (newToken) {
-              currentToken = newToken;
-              setAccessToken(newToken);
-              await updateTransactionRow(
-                spreadsheetId,
-                txSheet,
-                tx.rowIndex!,
-                analysis.mapping,
-                { ...tx, category: newCategory },
-                newToken
-              );
-            }
-          } else {
-            console.warn(`Row ${tx.rowIndex} update warning:`, rowErr);
-          }
         }
       }
 
@@ -2564,6 +2581,52 @@ export default function App() {
     [isRealGoogleConnected, spreadsheetId, ensureValidTokenOrLogin, loadSheetData]
   );
 
+  const handleCleanupLegacyMonthTabs = useCallback(
+    async (action: 'hide' | 'delete'): Promise<number> => {
+      if (!isRealGoogleConnected || !spreadsheetId) {
+        throw new Error('Google 시트가 연동되어 있지 않습니다.');
+      }
+      let token = await ensureValidTokenOrLogin();
+      if (!token) return 0;
+
+      const runCleanup = async (usedToken: string) => {
+        const result = await organizePerpetualSheetStructure({
+          spreadsheetId,
+          accessToken: usedToken,
+          oldMonthTabsAction: action,
+        });
+        const meta = await getSpreadsheetDetails(spreadsheetId, usedToken);
+        if (meta?.sheets) {
+          setSheetTabs(meta.sheets.map((s) => ({ id: s.id, title: s.title, hidden: s.hidden })));
+        }
+        setSyncToast({
+          show: true,
+          type: 'success',
+          message:
+            action === 'delete'
+              ? `🗑️ 기존 월별 시트 ${result.handledMonthTabsCount}개를 구글 시트에서 완전히 삭제했습니다.`
+              : `👁️ 기존 월별 시트 ${result.handledMonthTabsCount}개를 숨김 처리했습니다.`,
+        });
+        return result.handledMonthTabsCount;
+      };
+
+      try {
+        return await runCleanup(token);
+      } catch (err: any) {
+        if (isAuthExpiredError(err) || err?.message?.includes('AUTH_EXPIRED')) {
+          const loginRes = await googleSignIn();
+          if (loginRes?.accessToken) {
+            setAccessToken(loginRes.accessToken);
+            return await runCleanup(loginRes.accessToken);
+          }
+          return 0;
+        }
+        throw err;
+      }
+    },
+    [isRealGoogleConnected, spreadsheetId, ensureValidTokenOrLogin]
+  );
+
   const handleInspectExternalFile = useCallback(
     async (params: {
       sourceSpreadsheetId: string;
@@ -3470,8 +3533,10 @@ export default function App() {
         activeYear={activeYear}
         onLogin={handleLogin}
         onConsolidateCurrentFile={handleConsolidateCurrentFile}
+        onCleanupLegacyMonthTabs={handleCleanupLegacyMonthTabs}
         onInspectExternalFile={handleInspectExternalFile}
         onImportExternalFile={handleImportExternalFile}
+        availableCategories={customCategories.filter((c) => c.isVisible).map((c) => c.name)}
         onRunColumnsMigration={handleRunMigrationAllMonths}
         isMigratingColumns={isMigratingAllMonths}
         columnsProgress={migrationProgress}
