@@ -1440,7 +1440,7 @@ export async function appendTransactionRow(
   fallbackMapping: ColumnMapping,
   transaction: Omit<Transaction, 'id' | 'rowIndex' | 'sheetTitle'>,
   accessToken?: string | null
-): Promise<{ rowIndex: number; sheetTitle: string }> {
+): Promise<{ rowIndex: number; sheetTitle: string; sorted?: boolean }> {
   const gasUrl = typeof window !== 'undefined' ? localStorage.getItem('smart_money_gas_url') : null;
 
   // Prefer direct Google Sheets API via OAuth when accessToken is available so writes ALWAYS hit the
@@ -1643,7 +1643,7 @@ export async function appendTransactionRow(
     await sortSheetRowsByDate(spreadsheetId, sheetTitle, mapping.dateCol, accessToken, 'ASCENDING');
   }
 
-  return { rowIndex: targetRowNumber, sheetTitle };
+  return { rowIndex: targetRowNumber, sheetTitle, sorted: needsSort };
 }
 
 /**
@@ -1883,12 +1883,30 @@ export async function sortSheetRowsByDate(
   if (!accessToken) return;
 
   try {
-    const details = await getSpreadsheetDetails(spreadsheetId, accessToken);
-    const targetSheet = details.sheets.find((s) => s.title === sheetTitle);
-    if (!targetSheet) return;
+    // Fetch actual gridProperties (rowCount & columnCount) so GridRange never exceeds sheet limits!
+    const metaRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=sheets.properties(sheetId,title,gridProperties)`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (!metaRes.ok) return;
+    const metaJson = await metaRes.json();
+    const targetProp = (metaJson.sheets || []).find(
+      (s: any) => s.properties?.title === sheetTitle
+    )?.properties;
+    if (!targetProp) return;
 
-    // Fetch column A to determine filled row count and identify header row
-    const encodedRange = encodeURIComponent(`'${sheetTitle}'!A:A`);
+    const targetSheetId = targetProp.sheetId;
+    const gridRowCount = targetProp.gridProperties?.rowCount || 1000;
+    const gridColCount = targetProp.gridProperties?.columnCount || 10;
+
+    // Fetch date column (and A) to determine filled row count and identify header row
+    const colLetter = getColumnLetter(Math.max(0, dateColIndex));
+    const rangeStr = colLetter === 'A' ? `'${sheetTitle}'!A:A` : `'${sheetTitle}'!A:${colLetter}`;
+    const encodedRange = encodeURIComponent(rangeStr);
     const res = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodedRange}?valueRenderOption=FORMATTED_VALUE`,
       {
@@ -1903,43 +1921,56 @@ export async function sortSheetRowsByDate(
     if (rows.length <= 2) return; // 0 or 1 data row, nothing to sort
 
     let headerRowIndex = 0;
+    const checkCol = Math.max(0, dateColIndex);
     for (let r = 0; r < Math.min(rows.length, 5); r++) {
-      const val = String(rows[r]?.[0] || '').trim();
-      if (/(날짜|일자|일시|date)/i.test(val)) {
+      const valA = String(rows[r]?.[0] || '').trim();
+      const valDate = String(rows[r]?.[checkCol] || '').trim();
+      if (/(날짜|일자|일시|date)/i.test(valA) || /(날짜|일자|일시|date)/i.test(valDate)) {
         headerRowIndex = r;
         break;
       }
     }
 
-    // Sort all rows beneath the header row
-    await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        requests: [
-          {
-            sortRange: {
-              range: {
-                sheetId: targetSheet.id,
-                startRowIndex: headerRowIndex + 1, // Skip header row!
-                endRowIndex: rows.length,
-                startColumnIndex: 0,
-                endColumnIndex: 26, // Columns A to Z
-              },
-              sortSpecs: [
-                {
-                  dimensionIndex: dateColIndex >= 0 ? dateColIndex : 0,
-                  sortOrder,
+    const safeEndRow = Math.min(rows.length, gridRowCount);
+    const safeEndCol = Math.max(checkCol + 1, Math.min(26, gridColCount));
+    if (safeEndRow <= headerRowIndex + 1) return;
+
+    // Sort all rows beneath the header row within actual sheet grid bounds
+    const sortRes = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}:batchUpdate`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          requests: [
+            {
+              sortRange: {
+                range: {
+                  sheetId: targetSheetId,
+                  startRowIndex: headerRowIndex + 1, // Skip header row!
+                  endRowIndex: safeEndRow,
+                  startColumnIndex: 0,
+                  endColumnIndex: safeEndCol,
                 },
-              ],
+                sortSpecs: [
+                  {
+                    dimensionIndex: checkCol,
+                    sortOrder,
+                  },
+                ],
+              },
             },
-          },
-        ],
-      }),
-    });
+          ],
+        }),
+      }
+    );
+    if (!sortRes.ok) {
+      const errBody = await sortRes.text().catch(() => '');
+      console.warn('Auto sort sheet by date failed:', sortRes.status, errBody);
+    }
   } catch (err) {
     console.warn('Auto sort sheet by date notice:', err);
   }
@@ -1971,26 +2002,37 @@ export async function updateTransactionRow(
   transaction: Transaction,
   accessToken?: string | null
 ): Promise<void> {
-  // 1. Read existing row first to preserve other column cells/formulas
+  const gasUrl = typeof window !== 'undefined' ? localStorage.getItem('smart_money_gas_url') : null;
+
+  // 1. Read existing row first (only when OAuth accessToken exists) to preserve unmapped cells/formulas
   let existingValues: any[] = [];
-  try {
-    const readRange = encodeURIComponent(`'${sheetTitle}'!A${rowIndex}:Z${rowIndex}`);
-    const getRes = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${readRange}?valueRenderOption=UNFORMATTED_VALUE`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
+  if (accessToken) {
+    try {
+      const readRange = encodeURIComponent(`'${sheetTitle}'!A${rowIndex}:Z${rowIndex}`);
+      const getRes = await fetch(
+        `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${readRange}?valueRenderOption=UNFORMATTED_VALUE`,
+        {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
+      if (getRes.status === 401) {
+        clearAuthSession();
+        throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 만료되었습니다. 상단 [Google 로그인]을 눌러 토큰을 갱신해 주세요.');
       }
-    );
-    if (getRes.ok) {
-      const data = await getRes.json();
-      if (data.values && data.values.length > 0 && Array.isArray(data.values[0])) {
-        existingValues = [...data.values[0]];
+      if (getRes.ok) {
+        const data = await getRes.json();
+        if (data.values && data.values.length > 0 && Array.isArray(data.values[0])) {
+          existingValues = [...data.values[0]];
+        }
       }
+    } catch (err: any) {
+      if (isAuthExpiredError(err) || err?.message?.includes('AUTH_EXPIRED')) {
+        throw err;
+      }
+      console.warn('Could not read existing row prior to update:', err);
     }
-  } catch (err) {
-    console.warn('Could not read existing row prior to update:', err);
   }
 
   // 2. Determine target width
@@ -2092,7 +2134,15 @@ export async function updateTransactionRow(
     rowValues[mapping.memoCol] = cleanMemo;
   }
 
-  const gasUrl = typeof window !== 'undefined' ? localStorage.getItem('smart_money_gas_url') : null;
+  const previousDate =
+    mapping.dateCol >= 0 && existingValues[mapping.dateCol] !== undefined
+      ? normalizeDateString(
+          String(existingValues[mapping.dateCol]),
+          extractMonthNumberFromTab(sheetTitle) || undefined,
+          extractYearFromTab(sheetTitle) || extractYearFromDate(transaction.date) || 2026
+        )
+      : null;
+
   if (!accessToken) {
     if (gasUrl) {
       await postToGasWebApp(gasUrl, {
@@ -2131,6 +2181,11 @@ export async function updateTransactionRow(
   if (!res.ok) {
     const err = await res.json().catch(() => null);
     throw new Error(err?.error?.message || `구글 시트 ${rowIndex}행 수정 실패`);
+  }
+
+  // Only re-sort sheet when the transaction's date was actually moved to a different date
+  if (previousDate && transaction.date && previousDate !== transaction.date) {
+    await sortSheetRowsByDate(spreadsheetId, sheetTitle, mapping.dateCol, accessToken, 'ASCENDING');
   }
 }
 
@@ -2228,6 +2283,11 @@ export async function deleteMultipleTransactionRows(
     },
     body: JSON.stringify({ requests }),
   });
+
+  if (res.status === 401) {
+    clearAuthSession();
+    throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 만료되었습니다. 상단 [Google 로그인]을 눌러 토큰을 갱신해 주세요.');
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => null);

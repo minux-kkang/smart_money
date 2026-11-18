@@ -1203,7 +1203,9 @@ export default function App() {
         show: true,
         type: 'success',
         message: currentAuthToken
-          ? `✅ Google 시트 [${targetSheetTitle}] 탭 ${appendRes.rowIndex}행에 즉시 반영되었습니다!`
+          ? appendRes.sorted
+            ? `✅ Google 시트 [${targetSheetTitle}] 탭에 날짜순으로 정렬 삽입되었습니다!`
+            : `✅ Google 시트 [${targetSheetTitle}] 탭 ${appendRes.rowIndex}행에 즉시 반영되었습니다!`
           : `⚡ [Apps Script] 구글 시트 [${targetSheetTitle}] 탭에 실시간 저장되었습니다!`,
       });
 
@@ -1500,6 +1502,34 @@ export default function App() {
       await loadSheetData(spreadsheetId, activeSheetTitle, accessToken);
     } catch (e: any) {
       console.error('Google Sheets batch delete error:', e);
+      if (e?.message?.includes('AUTH_EXPIRED') || isAuthExpiredError(e)) {
+        try {
+          const newToken = await refreshGoogleToken();
+          if (newToken) {
+            setAccessToken(newToken);
+            const rowIndices = txs
+              .map((t) => t.rowIndex)
+              .filter((r): r is number => typeof r === 'number' && r > 0);
+            if (rowIndices.length > 0 && targetSheetTab) {
+              await deleteMultipleTransactionRows(
+                spreadsheetId,
+                targetSheetTab.id,
+                rowIndices,
+                newToken
+              );
+              setSyncToast({
+                show: true,
+                type: 'success',
+                message: `✅ 세션이 갱신되어 [${activeSheetTitle}] ${rowIndices.length}건이 삭제되었습니다.`,
+              });
+              await loadSheetData(spreadsheetId, activeSheetTitle, newToken);
+              return;
+            }
+          }
+        } catch (retryErr) {
+          console.warn('Batch delete retry failed:', retryErr);
+        }
+      }
       setSyncToast({
         show: true,
         type: 'error',
