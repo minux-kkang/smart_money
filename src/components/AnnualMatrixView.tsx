@@ -38,6 +38,7 @@ import {
 import { getPaymentGroupBadge } from '../utils/paymentGroupUtils';
 import { extractMonthNumberFromTab, extractYearFromTab } from '../services/googleSheets';
 import { ExpenseInputForm } from './ExpenseInputForm';
+import { detectSheetLayoutMode } from '../services/googleSheets';
 
 interface AnnualMatrixViewProps {
   yearData?: YearDashboardData;
@@ -2062,6 +2063,9 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
               transactions={effectiveTransactions}
               sheetTabs={sheetTabs}
               onFetchMonthTransactions={onFetchMonthTransactions}
+              isYearlyUnifiedMode={
+                detectSheetLayoutMode(sheetTabs || [], activeSheetTitle, spreadsheetId) === 'yearly'
+              }
             />
           </div>
         </div>

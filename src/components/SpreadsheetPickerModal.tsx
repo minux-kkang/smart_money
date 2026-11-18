@@ -76,16 +76,35 @@ export const SpreadsheetPickerModal: React.FC<SpreadsheetPickerModalProps> = ({
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var targetTitle = data.sheetTitle;
     var sheet = targetTitle ? ss.getSheetByName(targetTitle) : null;
+    if (!sheet && data.sheetId) {
+      var allSheets = ss.getSheets();
+      for (var i = 0; i < allSheets.length; i++) {
+        if (allSheets[i].getSheetId() === data.sheetId) {
+          sheet = allSheets[i];
+          break;
+        }
+      }
+    }
     if (!sheet && targetTitle) {
       sheet = ss.insertSheet(targetTitle);
       sheet.appendRow(['날짜', '구분', '분류', '내용/사용처', '금액', '결제수단', '지출유형', '세부품목', '비고']);
       sheet.setFrozenRows(1);
     }
     if (!sheet) sheet = ss.getActiveSheet();
-    
+
     if (data.action === 'append') {
-      sheet.appendRow(data.rowValues);
-      return ContentService.createTextOutput(JSON.stringify({ status: 'ok' })).setMimeType(ContentService.MimeType.JSON);
+      var row = data.rowValues;
+      if ((!row || !row.length) && data.transaction) {
+        var tx = data.transaction;
+        var typeLabel = tx.type === 'income' ? '수입' : tx.type === 'transfer' ? '이체' : '지출';
+        var kindLabel = tx.isRecurring ? '정' : tx.isSpecial ? '특' : '';
+        row = [tx.date || '', typeLabel, tx.category || '', tx.description || '', Number(tx.amount) || 0, tx.paymentMethod || '', kindLabel, '', tx.memo || ''];
+      }
+      if (!row || !row.length) {
+        return ContentService.createTextOutput(JSON.stringify({ error: 'rowValues missing' })).setMimeType(ContentService.MimeType.JSON);
+      }
+      sheet.appendRow(row);
+      return ContentService.createTextOutput(JSON.stringify({ status: 'ok', sheetTitle: sheet.getName(), rowIndex: sheet.getLastRow() })).setMimeType(ContentService.MimeType.JSON);
     } else if (data.action === 'update' && data.rowIndex) {
       sheet.getRange(data.rowIndex, 1, 1, data.rowValues.length).setValues([data.rowValues]);
       return ContentService.createTextOutput(JSON.stringify({ status: 'ok' })).setMimeType(ContentService.MimeType.JSON);

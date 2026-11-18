@@ -5,7 +5,7 @@ import {
   YearDashboardData,
   USER_2026_DATA,
 } from '../data/userLedgerData';
-import { isAuthExpiredError } from './firebase';
+import { clearAuthSession, isAuthExpiredError } from './firebase';
 import {
   parseSubItemsFromMemo,
   formatSubItemsForColumn,
@@ -121,11 +121,19 @@ export function detectSheetLayoutMode(
   }
   const stored = getStoredLayoutMode(spreadsheetId);
   const yearTabs = findAllYearTabs(tabs);
+  const hasSummaryTab = tabs.some(
+    (t) =>
+      t.title.trim() === PERPETUAL_SUMMARY_TAB_TITLE ||
+      /연도별\s*요약|연도\s*요약/i.test(t.title)
+  );
   const hasVisibleMonthTabs = tabs.some(
     (t) => !t.hidden && extractMonthNumberFromTab(t.title) !== null
   );
   const hasAnyMonthTabs = tabs.some((t) => extractMonthNumberFromTab(t.title) !== null);
   if (stored === 'yearly' && yearTabs.length > 0) return 'yearly';
+  // If spreadsheet already has both a perpetual summary tab and unified year tabs (e.g. '2026'),
+  // treat it as yearly unified mode even if legacy month tabs are still kept visible for verification.
+  if (hasSummaryTab && yearTabs.length > 0) return 'yearly';
   if (yearTabs.length > 0 && !hasVisibleMonthTabs) return 'yearly';
   if (stored === 'monthly' && hasAnyMonthTabs) return 'monthly';
   if (yearTabs.length > 0 && tabs.some((t) => t.title.trim() === String(yearTabs[0].year))) {
@@ -216,6 +224,9 @@ export async function getSpreadsheetDetails(
           hidden: Boolean(s.properties?.hidden),
         }));
         return { title, sheets };
+      }
+      if (res.status === 401) {
+        clearAuthSession();
       }
     } catch (e) {
       console.warn('OAuth metadata fetch failed, using fallback:', e);
@@ -329,6 +340,7 @@ export async function getSheetValues(
   accessToken?: string | null,
   range: string = 'A:Z'
 ): Promise<string[][]> {
+  let tokenExpired = false;
   if (accessToken) {
     try {
       const encodedRange = encodeURIComponent(`'${sheetTitle}'!${range}`);
@@ -345,13 +357,24 @@ export async function getSheetValues(
         const data = await res.json();
         return data.values || [];
       }
+      if (res.status === 401) {
+        tokenExpired = true;
+        clearAuthSession();
+      }
     } catch (e) {
       console.warn('OAuth fetch failed, trying public gviz fallback:', e);
     }
   }
 
   // Fallback to public gviz/tq endpoint (works without OAuth / without domain registration)
-  return await fetchPublicSheetViaGviz(spreadsheetId, sheetTitle);
+  try {
+    return await fetchPublicSheetViaGviz(spreadsheetId, sheetTitle);
+  } catch (gvizErr) {
+    if (tokenExpired) {
+      throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 만료되었습니다. 상단 [Google 로그인]을 눌러 재인증해 주세요.');
+    }
+    throw gvizErr;
+  }
 }
 
 /**
@@ -1172,148 +1195,111 @@ export function analyzeSheetStructure(
 }
 
 /**
- * Append a new transaction row to a sheet tab
+ * Resolve clean per-tab ColumnMapping from an inspected header row without leaking stale optional
+ * columns (merchantCol, itemCol, incomeCol, expenseCol) from another sheet tab's fallbackMapping.
  */
-export async function appendTransactionRow(
-  spreadsheetId: string,
-  sheetTitle: string,
+function resolveMappingFromHeaderRow(
+  headerRow: string[],
   fallbackMapping: ColumnMapping,
+  headerRowIndex: number
+): ColumnMapping {
+  const cleanHeaders = (headerRow || []).map((col) =>
+    (col || '').trim().toLowerCase().replace(/[\s_\-\/\(\)\[\],.:;]/g, '')
+  );
+  const hasKnownHeaders = cleanHeaders.some(
+    (c) =>
+      /(날짜|일자|일시|date)/.test(c) ||
+      /(금액|지출|수입|비용|amount)/.test(c) ||
+      /(분류|카테고리|내용|사용처|결제수단)/.test(c)
+  );
+  if (!hasKnownHeaders || headerRow.length === 0) {
+    return { ...fallbackMapping };
+  }
+
+  let dateCol = -1;
+  let typeCol: number | undefined;
+  let categoryCol = -1;
+  let descCol = -1;
+  let merchantCol: number | undefined;
+  let itemCol: number | undefined;
+  let amountCol = -1;
+  let incomeCol: number | undefined;
+  let expenseCol: number | undefined;
+  let paymentMethodCol: number | undefined;
+  let recurringTypeCol: number | undefined;
+  let subItemsCol: number | undefined;
+  let memoCol: number | undefined;
+
+  cleanHeaders.forEach((clean, idx) => {
+    if (!clean) return;
+    if (recurringTypeCol === undefined && /^(지출유형|지출구분|비용구분|정기특별|정특|예산유형)$/.test(clean)) {
+      recurringTypeCol = idx;
+    } else if (
+      subItemsCol === undefined &&
+      /^(세부품목|상세품목|품목상세|세부항목|상세항목|세부내역|상세내역|품목내역|품목세부|세부내용|상세내용|세부|상세|subitems?|sub_items?)$/i.test(clean)
+    ) {
+      subItemsCol = idx;
+    } else if (dateCol === -1 && /^(날짜|일자|일시|date|거래일|거래일자)$/.test(clean)) {
+      dateCol = idx;
+    } else if (typeCol === undefined && /^(구분|유형|종류|수입지출|입출|수지|type)$/.test(clean)) {
+      typeCol = idx;
+    } else if (categoryCol === -1 && /^(분류|카테고리|대분류|항목|계정|category)$/.test(clean)) {
+      categoryCol = idx;
+    } else if (descCol === -1 && /^(내용사용처|사용처내용|내역사용처|사용처내역|내용및사용처)$/.test(clean)) {
+      descCol = idx;
+    } else if (merchantCol === undefined && /^(사용처|가맹점|상호|상호명|거래처|지출처|구입처|구매처|결제처|매장)$/.test(clean)) {
+      merchantCol = idx;
+    } else if (itemCol === undefined && /^(내용|품목|품명|적요|내역|item|description)$/.test(clean)) {
+      itemCol = idx;
+    } else if (incomeCol === undefined && /^(수입|입금|income|수입액|입금액)$/.test(clean)) {
+      incomeCol = idx;
+    } else if (expenseCol === undefined && /^(지출|출금|expense|지출액|출금액)$/.test(clean)) {
+      expenseCol = idx;
+    } else if (amountCol === -1 && /^(금액|지출액|비용|사용금액|결제금액|amount|expense|price)$/.test(clean)) {
+      amountCol = idx;
+    } else if (paymentMethodCol === undefined && /^(결제수단|결제방법|결제방식|카드|수단|지불수단|payment|method)$/.test(clean)) {
+      paymentMethodCol = idx;
+    } else if (memoCol === undefined && /^(메모|비고|비고란|참고|memo|note)$/.test(clean)) {
+      memoCol = idx;
+    }
+  });
+
+  if (descCol === -1) {
+    if (merchantCol !== undefined) descCol = merchantCol;
+    else if (itemCol !== undefined) descCol = itemCol;
+    else descCol = fallbackMapping.descCol >= 0 ? fallbackMapping.descCol : 3;
+  }
+
+  if (amountCol === -1) {
+    if (expenseCol !== undefined) amountCol = expenseCol;
+    else amountCol = fallbackMapping.amountCol >= 0 ? fallbackMapping.amountCol : 4;
+  }
+
+  return {
+    dateCol: dateCol >= 0 ? dateCol : fallbackMapping.dateCol >= 0 ? fallbackMapping.dateCol : 0,
+    typeCol,
+    categoryCol: categoryCol >= 0 ? categoryCol : fallbackMapping.categoryCol >= 0 ? fallbackMapping.categoryCol : 2,
+    descCol,
+    merchantCol,
+    itemCol,
+    amountCol,
+    incomeCol,
+    expenseCol,
+    paymentMethodCol,
+    recurringTypeCol,
+    subItemsCol,
+    memoCol,
+    headerRowIndex,
+    detectedHeaders: headerRow,
+  };
+}
+
+function buildTransactionRowValues(
+  mapping: ColumnMapping,
   transaction: Omit<Transaction, 'id' | 'rowIndex' | 'sheetTitle'>,
-  accessToken?: string | null
-): Promise<{ rowIndex: number; sheetTitle: string }> {
-  // Priority 1: Check Google Apps Script Web App URL (Permanent real-time write without logins!)
-  const gasUrl = typeof window !== 'undefined' ? localStorage.getItem('smart_money_gas_url') : null;
-  if (gasUrl) {
-    try {
-      await fetch(gasUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'append',
-          sheetTitle,
-          transaction,
-        }),
-      });
-      return { rowIndex: 2, sheetTitle };
-    } catch (gasErr) {
-      console.warn('GAS Web App append warning, falling back to OAuth if available:', gasErr);
-      if (!accessToken) throw gasErr;
-    }
-  }
-
-  if (!accessToken) {
-    throw new Error('Google OAuth 액세스 토큰 또는 Apps Script 웹앱 연동이 필요합니다.');
-  }
-
-  // 1. Fetch current rows from target sheet to inspect headers and find the exact first empty row
-  let rows: string[][] = [];
-  let tabExists = true;
-  try {
-    const encodedRange = encodeURIComponent(`'${sheetTitle}'!A:Z`);
-    const res = await fetch(
-      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodedRange}?valueRenderOption=FORMATTED_VALUE`,
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-      }
-    );
-    if (res.ok) {
-      const data = await res.json();
-      rows = data.values || [];
-    } else if (res.status === 400 || res.status === 404) {
-      tabExists = false;
-    } else if (res.status === 401) {
-      throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 만료되었습니다. 상단 [Google 로그인]을 눌러 재인증해 주세요.');
-    }
-  } catch (err: any) {
-    if (isAuthExpiredError(err) || err?.message?.includes('AUTH_EXPIRED')) {
-      throw err;
-    }
-    tabExists = false;
-  }
-
-  // 2. If the sheet tab does not exist, create it with standard 9 headers
-  const defaultHeaders = ['날짜', '구분', '분류', '내용/사용처', '금액', '결제수단', '지출유형', '세부품목', '비고'];
-  if (!tabExists || rows.length === 0) {
-    await addMonthlySheetTab(spreadsheetId, sheetTitle, defaultHeaders, accessToken);
-    rows = [defaultHeaders];
-  }
-
-  // 3. Dynamically detect header row and column mapping for THIS specific sheet tab
-  let headerRowIndex = 0;
-  for (let r = 0; r < Math.min(rows.length, 10); r++) {
-    const rowStr = (rows[r] || []).join(' ');
-    if (/(날짜|일자|일시)/.test(rowStr) && /(금액|지출|수입|비용)/.test(rowStr)) {
-      headerRowIndex = r;
-      break;
-    }
-  }
-
-  const headerRow = rows[headerRowIndex] || [];
-  const mapping: ColumnMapping = { ...fallbackMapping };
-  if (headerRow.length > 0) {
-    headerRow.forEach((colName, idx) => {
-      const clean = (colName || '').trim().toLowerCase().replace(/[\s_\-\/\(\)\[\],.:;]/g, '');
-      if (/^(지출유형|지출구분|비용구분|정기특별|정특|예산유형)$/.test(clean)) mapping.recurringTypeCol = idx;
-      else if (/^(세부품목|상세품목|품목상세|세부항목|상세항목|세부내역|상세내역|품목내역|품목세부|세부내용|상세내용|세부|상세|subitems?|sub_items?)$/i.test(clean)) mapping.subItemsCol = idx;
-      else if (/^(날짜|일자|일시|date)$/.test(clean)) mapping.dateCol = idx;
-      else if (/^(구분|유형|수입지출|입출|type)$/.test(clean)) mapping.typeCol = idx;
-      else if (/^(분류|카테고리|항목|계정|category)$/.test(clean)) mapping.categoryCol = idx;
-      else if (/^(내용사용처|사용처내용|내용및사용처)$/.test(clean)) mapping.descCol = idx;
-      else if (/^(사용처|가맹점|상호|거래처|지출처|구입처|구매처|결제처|매장)$/.test(clean)) mapping.merchantCol = idx;
-      else if (/^(내용|품목|품명|적요|내역|item|description)$/.test(clean)) mapping.descCol = idx;
-      else if (/^(금액|지출액|비용|amount|expense|price)$/.test(clean)) mapping.amountCol = idx;
-      else if (/^(결제수단|결제방법|카드|수단|지불수단|payment)$/.test(clean)) mapping.paymentMethodCol = idx;
-      else if (/^(메모|비고|비고란|참고|memo|note)$/.test(clean)) mapping.memoCol = idx;
-    });
-  }
-
-  // 4. Find the EXACT row to write into & track last filled row's date to avoid unnecessary 3,000-row sorts
-  const contextYear =
-    extractYearFromTab(sheetTitle) ||
-    extractYearFromDate(transaction.date) ||
-    2026;
-  const contextMonth = extractMonthNumberFromTab(sheetTitle) || undefined;
-  let targetRowNumber = headerRowIndex + 2; // 1-indexed row number in Google Sheets
-  let foundEmptyRow = false;
-  let lastFilledDate: string | null = null;
-  let isExistingSorted = true;
-
-  for (let r = headerRowIndex + 1; r < rows.length; r++) {
-    const row = rows[r] || [];
-    const dateVal = mapping.dateCol >= 0 && row[mapping.dateCol] ? String(row[mapping.dateCol]).trim() : '';
-    const descVal = mapping.descCol >= 0 && row[mapping.descCol] ? String(row[mapping.descCol]).trim() : '';
-    const amtVal = mapping.amountCol >= 0 && row[mapping.amountCol] ? String(row[mapping.amountCol]).trim() : '';
-    const catVal = mapping.categoryCol >= 0 && row[mapping.categoryCol] ? String(row[mapping.categoryCol]).trim() : '';
-
-    if (!dateVal && !descVal && !amtVal && !catVal) {
-      if (!foundEmptyRow) {
-        targetRowNumber = r + 1;
-        foundEmptyRow = true;
-      }
-      continue;
-    }
-
-    // If a non-empty row appears AFTER an empty row, we must sort/compact
-    if (foundEmptyRow) {
-      isExistingSorted = false;
-    }
-
-    const parsedDate = normalizeDateString(dateVal, contextMonth, contextYear);
-    if (parsedDate) {
-      if (lastFilledDate && parsedDate < lastFilledDate) {
-        isExistingSorted = false;
-      }
-      lastFilledDate = parsedDate;
-    }
-  }
-
-  if (!foundEmptyRow) {
-    targetRowNumber = rows.length + 1;
-  }
-
-  // 5. Construct row values
+  minColCount = 9,
+  existingRow: any[] = []
+): any[] {
   const maxCol = Math.max(
     mapping.dateCol,
     mapping.categoryCol,
@@ -1328,11 +1314,10 @@ export async function appendTransactionRow(
     mapping.recurringTypeCol ?? -1,
     mapping.subItemsCol ?? -1,
     mapping.typeCol ?? -1,
-    headerRow.length - 1,
+    minColCount - 1,
     8
   );
 
-  const existingRow = rows[targetRowNumber - 1] || [];
   const rowValues: any[] = [];
   for (let i = 0; i <= maxCol; i++) {
     rowValues.push(existingRow[i] !== undefined ? existingRow[i] : '');
@@ -1380,20 +1365,16 @@ export async function appendTransactionRow(
     rowValues[mapping.paymentMethodCol] = transaction.paymentMethod || '';
   }
 
-  // 지출유형 컬럼 ("정", "특", "")
   if (mapping.recurringTypeCol !== undefined && mapping.recurringTypeCol >= 0) {
     rowValues[mapping.recurringTypeCol] = transaction.isRecurring ? '정' : transaction.isSpecial ? '특' : '';
   }
 
-  // 세부품목 컬럼
   if (mapping.subItemsCol !== undefined && mapping.subItemsCol >= 0) {
     rowValues[mapping.subItemsCol] = formatSubItemsForColumn(transaction.subItems);
   }
 
-  // 비고 컬럼 (순수 메모, 태그 분리)
   if (mapping.memoCol !== undefined && mapping.memoCol >= 0) {
     let cleanMemo = stripTagsFromMemo(transaction.memo);
-    // Backward compatibility: if sheet has no dedicated recurringTypeCol or subItemsCol, preserve tags in memo
     if (mapping.subItemsCol === undefined || mapping.subItemsCol < 0) {
       cleanMemo = serializeSubItemsToMemo(cleanMemo, transaction.subItems);
     }
@@ -1406,6 +1387,181 @@ export async function appendTransactionRow(
     }
     rowValues[mapping.memoCol] = cleanMemo;
   }
+
+  return rowValues;
+}
+
+const STANDARD_9_COL_MAPPING: ColumnMapping = {
+  dateCol: 0,
+  typeCol: 1,
+  categoryCol: 2,
+  descCol: 3,
+  amountCol: 4,
+  paymentMethodCol: 5,
+  recurringTypeCol: 6,
+  subItemsCol: 7,
+  memoCol: 8,
+  headerRowIndex: 0,
+  detectedHeaders: STANDARD_9_HEADERS,
+};
+
+async function postToGasWebApp(gasUrl: string, payload: Record<string, any>): Promise<any> {
+  const res = await fetch(gasUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`Apps Script 웹앱 요청 실패 (HTTP ${res.status})`);
+  }
+  const text = await res.text().catch(() => '');
+  if (text) {
+    let parsed: any = null;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // Non-JSON text returned
+      return null;
+    }
+    if (parsed?.error) {
+      throw new Error(`Apps Script 오류: ${parsed.error}`);
+    }
+    return parsed;
+  }
+  return null;
+}
+
+/**
+ * Append a new transaction row to a sheet tab
+ */
+export async function appendTransactionRow(
+  spreadsheetId: string,
+  sheetTitle: string,
+  fallbackMapping: ColumnMapping,
+  transaction: Omit<Transaction, 'id' | 'rowIndex' | 'sheetTitle'>,
+  accessToken?: string | null
+): Promise<{ rowIndex: number; sheetTitle: string }> {
+  const gasUrl = typeof window !== 'undefined' ? localStorage.getItem('smart_money_gas_url') : null;
+
+  // Prefer direct Google Sheets API via OAuth when accessToken is available so writes ALWAYS hit the
+  // currently active spreadsheetId/sheetTitle with dynamic column mapping and chronological sorting.
+  if (!accessToken) {
+    if (gasUrl) {
+      const mappingForGas =
+        extractYearFromTab(sheetTitle) !== null ? STANDARD_9_COL_MAPPING : fallbackMapping;
+      const rowValues = buildTransactionRowValues(mappingForGas, transaction, 9);
+      const resJson = await postToGasWebApp(gasUrl, {
+        action: 'append',
+        sheetTitle,
+        rowValues,
+        transaction,
+      });
+      return { rowIndex: resJson?.rowIndex || 2, sheetTitle };
+    }
+    throw new Error('Google OAuth 액세스 토큰 또는 Apps Script 웹앱 연동이 필요합니다.');
+  }
+
+  // 1. Fetch current rows from target sheet to inspect headers and find the exact first empty row
+  let rows: string[][] = [];
+  let tabExists = true;
+  try {
+    const encodedRange = encodeURIComponent(`'${sheetTitle}'!A:Z`);
+    const res = await fetch(
+      `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values/${encodedRange}?valueRenderOption=FORMATTED_VALUE`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      }
+    );
+    if (res.ok) {
+      const data = await res.json();
+      rows = data.values || [];
+    } else if (res.status === 400 || res.status === 404) {
+      tabExists = false;
+    } else if (res.status === 401) {
+      clearAuthSession();
+      throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 만료되었습니다. 상단 [Google 로그인]을 눌러 재인증해 주세요.');
+    }
+  } catch (err: any) {
+    if (isAuthExpiredError(err) || err?.message?.includes('AUTH_EXPIRED')) {
+      throw err;
+    }
+    tabExists = false;
+  }
+
+  // 2. If the sheet tab does not exist, create it with standard 9 headers
+  const defaultHeaders = STANDARD_9_HEADERS;
+  if (!tabExists || rows.length === 0) {
+    await addMonthlySheetTab(spreadsheetId, sheetTitle, defaultHeaders, accessToken);
+    rows = [defaultHeaders];
+  }
+
+  // 3. Dynamically detect header row and column mapping for THIS specific sheet tab (clean reset of optional cols)
+  let headerRowIndex = 0;
+  for (let r = 0; r < Math.min(rows.length, 10); r++) {
+    const rowStr = (rows[r] || []).join(' ');
+    if (/(날짜|일자|일시)/.test(rowStr) && /(금액|지출|수입|비용)/.test(rowStr)) {
+      headerRowIndex = r;
+      break;
+    }
+  }
+
+  const headerRow = rows[headerRowIndex] || [];
+  const mapping = resolveMappingFromHeaderRow(headerRow, fallbackMapping, headerRowIndex);
+
+  // 4. Find the EXACT row to write into & track last filled row's date to avoid unnecessary 3,000-row sorts
+  const contextYear =
+    extractYearFromTab(sheetTitle) ||
+    extractYearFromDate(transaction.date) ||
+    2026;
+  const contextMonth = extractMonthNumberFromTab(sheetTitle) || undefined;
+  let targetRowNumber = headerRowIndex + 2; // 1-indexed row number in Google Sheets
+  let foundEmptyRow = false;
+  let lastFilledDate: string | null = null;
+  let isExistingSorted = true;
+
+  for (let r = headerRowIndex + 1; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const dateVal = mapping.dateCol >= 0 && row[mapping.dateCol] ? String(row[mapping.dateCol]).trim() : '';
+    const descVal = mapping.descCol >= 0 && row[mapping.descCol] ? String(row[mapping.descCol]).trim() : '';
+    const amtVal = mapping.amountCol >= 0 && row[mapping.amountCol] ? String(row[mapping.amountCol]).trim() : '';
+    const catVal = mapping.categoryCol >= 0 && row[mapping.categoryCol] ? String(row[mapping.categoryCol]).trim() : '';
+
+    if (!dateVal && !descVal && !amtVal && !catVal) {
+      if (!foundEmptyRow) {
+        targetRowNumber = r + 1;
+        foundEmptyRow = true;
+      }
+      continue;
+    }
+
+    // If a non-empty row appears AFTER an empty row, we must sort/compact
+    if (foundEmptyRow) {
+      isExistingSorted = false;
+    }
+
+    const parsedDate = normalizeDateString(dateVal, contextMonth, contextYear);
+    if (parsedDate) {
+      if (lastFilledDate && parsedDate < lastFilledDate) {
+        isExistingSorted = false;
+      }
+      lastFilledDate = parsedDate;
+    }
+  }
+
+  if (!foundEmptyRow) {
+    targetRowNumber = rows.length + 1;
+  }
+
+  // 5. Construct row values
+  const existingRow = rows[targetRowNumber - 1] || [];
+  const rowValues = buildTransactionRowValues(
+    mapping,
+    transaction,
+    Math.max(headerRow.length, 9),
+    existingRow
+  );
 
   // 6. Write directly into that exact row in Google Sheets via PUT!
   const endColLetter = getColumnLetter(rowValues.length - 1);
@@ -1426,6 +1582,7 @@ export async function appendTransactionRow(
   );
 
   if (putRes.status === 401) {
+    clearAuthSession();
     throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 만료되었습니다. 상단 [Google 로그인]을 눌러 재인증해 주세요.');
   }
 
@@ -1503,29 +1660,22 @@ export async function appendBatchTransactions(
     return { count: 0, sheetTitle };
   }
 
-  // Priority 1: Check Google Apps Script Web App URL
   const gasUrl = typeof window !== 'undefined' ? localStorage.getItem('smart_money_gas_url') : null;
-  if (gasUrl) {
-    try {
+  if (!accessToken) {
+    if (gasUrl) {
+      const mappingForGas =
+        extractYearFromTab(sheetTitle) !== null ? STANDARD_9_COL_MAPPING : fallbackMapping;
       for (const tx of transactions) {
-        await fetch(gasUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({
-            action: 'append',
-            sheetTitle,
-            transaction: tx,
-          }),
+        const rowValues = buildTransactionRowValues(mappingForGas, tx, 9);
+        await postToGasWebApp(gasUrl, {
+          action: 'append',
+          sheetTitle,
+          rowValues,
+          transaction: tx,
         });
       }
       return { count: transactions.length, sheetTitle };
-    } catch (gasErr) {
-      console.warn('GAS Web App batch append warning:', gasErr);
-      if (!accessToken) throw gasErr;
     }
-  }
-
-  if (!accessToken) {
     throw new Error('Google OAuth 액세스 토큰 또는 Apps Script 웹앱 연동이 필요합니다.');
   }
 
@@ -1548,6 +1698,7 @@ export async function appendBatchTransactions(
     } else if (res.status === 400 || res.status === 404) {
       tabExists = false;
     } else if (res.status === 401) {
+      clearAuthSession();
       throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 만료되었습니다. 상단 [Google 로그인]을 눌러 재인증해 주세요.');
     }
   } catch (err: any) {
@@ -1558,7 +1709,7 @@ export async function appendBatchTransactions(
   }
 
   // 2. If the sheet tab does not exist, create it with standard 9 headers
-  const defaultHeaders = ['날짜', '구분', '분류', '내용/사용처', '금액', '결제수단', '지출유형', '세부품목', '비고'];
+  const defaultHeaders = STANDARD_9_HEADERS;
   if (!tabExists || rows.length === 0) {
     await addMonthlySheetTab(spreadsheetId, sheetTitle, defaultHeaders, accessToken);
     rows = [defaultHeaders];
@@ -1575,23 +1726,7 @@ export async function appendBatchTransactions(
   }
 
   const headerRow = rows[headerRowIndex] || [];
-  const mapping: ColumnMapping = { ...fallbackMapping };
-  if (headerRow.length > 0) {
-    headerRow.forEach((colName, idx) => {
-      const clean = (colName || '').trim().toLowerCase().replace(/[\s_\-\/\(\)\[\],.:;]/g, '');
-      if (/^(지출유형|지출구분|비용구분|정기특별|정특|예산유형)$/.test(clean)) mapping.recurringTypeCol = idx;
-      else if (/^(세부품목|상세품목|품목상세|세부항목|상세항목|세부내역|상세내역|품목내역|품목세부|세부내용|상세내용|세부|상세|subitems?|sub_items?)$/i.test(clean)) mapping.subItemsCol = idx;
-      else if (/^(날짜|일자|일시|date)$/.test(clean)) mapping.dateCol = idx;
-      else if (/^(구분|유형|수입지출|입출|type)$/.test(clean)) mapping.typeCol = idx;
-      else if (/^(분류|카테고리|항목|계정|category)$/.test(clean)) mapping.categoryCol = idx;
-      else if (/^(내용사용처|사용처내용|내용및사용처)$/.test(clean)) mapping.descCol = idx;
-      else if (/^(사용처|가맹점|상호|거래처|지출처|구입처|구매처|결제처|매장)$/.test(clean)) mapping.merchantCol = idx;
-      else if (/^(내용|품목|품명|적요|내역|item|description)$/.test(clean)) mapping.descCol = idx;
-      else if (/^(금액|지출액|비용|amount|expense|price)$/.test(clean)) mapping.amountCol = idx;
-      else if (/^(결제수단|결제방법|카드|수단|지불수단|payment)$/.test(clean)) mapping.paymentMethodCol = idx;
-      else if (/^(메모|비고|비고란|참고|memo|note)$/.test(clean)) mapping.memoCol = idx;
-    });
-  }
+  const mapping = resolveMappingFromHeaderRow(headerRow, fallbackMapping, headerRowIndex);
 
   // 4. Find targetRowNumber (first empty row after headerRowIndex) & track last existing date
   const contextYear =
@@ -1637,77 +1772,11 @@ export async function appendBatchTransactions(
   }
 
   // 5. Construct row values for each transaction
-  const maxCol = Math.max(
-    mapping.dateCol,
-    mapping.categoryCol,
-    mapping.descCol,
-    mapping.merchantCol ?? -1,
-    mapping.itemCol ?? -1,
-    mapping.amountCol,
-    mapping.incomeCol ?? -1,
-    mapping.expenseCol ?? -1,
-    mapping.paymentMethodCol ?? -1,
-    mapping.memoCol ?? -1,
-    mapping.recurringTypeCol ?? -1,
-    mapping.subItemsCol ?? -1,
-    mapping.typeCol ?? -1,
-    headerRow.length - 1,
-    8
+  const minCols = Math.max(headerRow.length, 9);
+  const batchRowValues: any[][] = transactions.map((tx) =>
+    buildTransactionRowValues(mapping, tx, minCols)
   );
-
-  const batchRowValues: any[][] = [];
-  for (const transaction of transactions) {
-    const rowValues: any[] = new Array(maxCol + 1).fill('');
-
-    if (mapping.dateCol >= 0) rowValues[mapping.dateCol] = transaction.date;
-    if (mapping.typeCol !== undefined && mapping.typeCol >= 0) {
-      rowValues[mapping.typeCol] =
-        transaction.type === 'expense' ? '지출' : transaction.type === 'income' ? '수입' : '이체';
-    }
-    if (mapping.categoryCol >= 0) rowValues[mapping.categoryCol] = transaction.category;
-    if (mapping.descCol >= 0) rowValues[mapping.descCol] = transaction.description;
-
-    if (mapping.incomeCol !== undefined && mapping.expenseCol !== undefined) {
-      if (transaction.type === 'income') {
-        rowValues[mapping.incomeCol] = transaction.amount;
-        rowValues[mapping.expenseCol] = '';
-      } else {
-        rowValues[mapping.incomeCol] = '';
-        rowValues[mapping.expenseCol] = transaction.amount;
-      }
-    } else if (mapping.amountCol >= 0) {
-      rowValues[mapping.amountCol] = transaction.amount;
-    }
-
-    if (mapping.paymentMethodCol !== undefined && mapping.paymentMethodCol >= 0) {
-      rowValues[mapping.paymentMethodCol] = transaction.paymentMethod || '';
-    }
-
-    if (mapping.recurringTypeCol !== undefined && mapping.recurringTypeCol >= 0) {
-      rowValues[mapping.recurringTypeCol] = transaction.isRecurring ? '정' : transaction.isSpecial ? '특' : '';
-    }
-
-    if (mapping.subItemsCol !== undefined && mapping.subItemsCol >= 0) {
-      rowValues[mapping.subItemsCol] = formatSubItemsForColumn(transaction.subItems);
-    }
-
-    if (mapping.memoCol !== undefined && mapping.memoCol >= 0) {
-      let cleanMemo = stripTagsFromMemo(transaction.memo);
-      if (mapping.subItemsCol === undefined || mapping.subItemsCol < 0) {
-        cleanMemo = serializeSubItemsToMemo(cleanMemo, transaction.subItems);
-      }
-      if (mapping.recurringTypeCol === undefined || mapping.recurringTypeCol < 0) {
-        if (transaction.isRecurring && !cleanMemo.includes('[정기예산]')) {
-          cleanMemo = `[정기예산] ${cleanMemo}`.trim();
-        } else if (transaction.isSpecial && !cleanMemo.includes('[특별지출]')) {
-          cleanMemo = `[특별지출] ${cleanMemo}`.trim();
-        }
-      }
-      rowValues[mapping.memoCol] = cleanMemo;
-    }
-
-    batchRowValues.push(rowValues);
-  }
+  const maxCol = (batchRowValues[0]?.length || 9) - 1;
 
   // 6. Write into sheet via PUT
   const endColLetter = getColumnLetter(maxCol);
@@ -1729,6 +1798,7 @@ export async function appendBatchTransactions(
   );
 
   if (putRes.status === 401) {
+    clearAuthSession();
     throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 만료되었습니다. 상단 [Google 로그인]을 눌러 재인증해 주세요.');
   }
 
@@ -2022,28 +2092,17 @@ export async function updateTransactionRow(
     rowValues[mapping.memoCol] = cleanMemo;
   }
 
-  // Priority 1: Check Google Apps Script Web App URL
   const gasUrl = typeof window !== 'undefined' ? localStorage.getItem('smart_money_gas_url') : null;
-  if (gasUrl) {
-    try {
-      await fetch(gasUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'update',
-          sheetTitle,
-          rowIndex,
-          rowValues,
-        }),
+  if (!accessToken) {
+    if (gasUrl) {
+      await postToGasWebApp(gasUrl, {
+        action: 'update',
+        sheetTitle,
+        rowIndex,
+        rowValues,
       });
       return;
-    } catch (gasErr) {
-      console.warn('GAS Web App update warning, falling back to OAuth if available:', gasErr);
-      if (!accessToken) throw gasErr;
     }
-  }
-
-  if (!accessToken) {
     throw new Error('Google OAuth 액세스 토큰 또는 Apps Script 웹앱 연동이 필요합니다.');
   }
 
@@ -2065,6 +2124,7 @@ export async function updateTransactionRow(
   );
 
   if (res.status === 401) {
+    clearAuthSession();
     throw new Error('AUTH_EXPIRED: Google OAuth 토큰이 만료되었습니다. 상단 [Google 로그인]을 눌러 토큰을 갱신해 주세요.');
   }
 
@@ -2081,28 +2141,20 @@ export async function deleteTransactionRow(
   spreadsheetId: string,
   sheetId: number,
   rowIndex: number,
-  accessToken?: string | null
+  accessToken?: string | null,
+  sheetTitle?: string
 ): Promise<void> {
   const gasUrl = typeof window !== 'undefined' ? localStorage.getItem('smart_money_gas_url') : null;
-  if (gasUrl) {
-    try {
-      await fetch(gasUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({
-          action: 'delete',
-          sheetId,
-          rowIndex,
-        }),
+  if (!accessToken) {
+    if (gasUrl) {
+      await postToGasWebApp(gasUrl, {
+        action: 'delete',
+        sheetId,
+        sheetTitle,
+        rowIndex,
       });
       return;
-    } catch (gasErr) {
-      console.warn('GAS Web App delete warning, falling back to OAuth if available:', gasErr);
-      if (!accessToken) throw gasErr;
     }
-  }
-
-  if (!accessToken) {
     throw new Error('Google OAuth 액세스 토큰 또는 Apps Script 웹앱 연동이 필요합니다.');
   }
 

@@ -524,12 +524,22 @@ export default function App() {
 
   // 2. Fetch and Analyze Google Sheet Data (supports both OAuth and public gviz)
   const loadSheetData = useCallback(
-    async (sId: string, sheetName: string, token?: string | null) => {
+    async (
+      sId: string,
+      sheetName: string,
+      token?: string | null,
+      options?: { explicitTabSelection?: boolean }
+    ) => {
       setIsLoadingData(true);
       setErrorNotice(null);
+      let activeToken = token ?? getSavedToken() ?? null;
       try {
         // Fetch metadata to get latest sheet list and title
-        const meta = await getSpreadsheetDetails(sId, token);
+        const meta = await getSpreadsheetDetails(sId, activeToken);
+        if (activeToken && !getSavedToken()) {
+          activeToken = null;
+          setAccessToken(null);
+        }
         setSpreadsheetTitle(meta.title);
         setSpreadsheetUrl(`https://docs.google.com/spreadsheets/d/${sId}`);
 
@@ -543,7 +553,7 @@ export default function App() {
         // Auto-load categories & payment methods from '분류설정' sheet tab if present
         const settingsTab = findSettingsTab(formattedTabs);
         if (settingsTab) {
-          loadCategoriesFromGoogleSheet(sId, token, formattedTabs)
+          loadCategoriesFromGoogleSheet(sId, activeToken, formattedTabs)
             .then((loaded) => {
               if (loaded) {
                 if (loaded.categories.length > 0) {
@@ -569,7 +579,6 @@ export default function App() {
           /지출내역|가계부내역|거래내역|수입지출|입출금|상세내역|내역입력|가계부|지출|수입|거래|기록|ledger|transactions/i.test(
             t
           );
-        const isMonthNamedTab = (t: string) => /(?:0)?\d{1,2}월/.test(t);
         const isConfigTab = (t: string) =>
           /분류관리|분류|기준목록|기준|설정|카테고리|코드|항목관리|자산|계좌관리|카드관리|기초/i.test(
             t
@@ -578,23 +587,51 @@ export default function App() {
           /dashboard|대시보드|요약|summary|연간|matrix/i.test(t);
 
         // Intelligently find target sheet (supports both unified year tabs e.g. '2026' and legacy monthly tabs '1월'~'12월')
-        const detectedMode = detectSheetLayoutMode(formattedTabs, sheetName, sId);
-        const reqTabYear = extractYearFromTab(sheetName);
-        const reqMonthNum = reqTabYear === null ? extractMonthNumberFromTab(sheetName) : null;
+        const effectiveSheetName = sheetName?.trim() || '';
+        const detectedMode = detectSheetLayoutMode(formattedTabs, effectiveSheetName || undefined, sId);
+        if (detectedMode === 'yearly') {
+          setStoredLayoutMode(sId, 'yearly');
+        }
 
-        let targetSheet = sheetName;
-        const exactMatch = formattedTabs.find((t) => t.title === targetSheet);
+        const reqTabYear = extractYearFromTab(effectiveSheetName);
+        const fallbackMonthNum = new Date().getMonth() + 1;
+        const reqMonthNum =
+          reqTabYear === null
+            ? effectiveSheetName
+              ? extractMonthNumberFromTab(effectiveSheetName)
+              : fallbackMonthNum
+            : null;
 
-        if (
+        let targetSheet = effectiveSheetName;
+        const exactMatch = effectiveSheetName
+          ? formattedTabs.find((t) => t.title === effectiveSheetName)
+          : undefined;
+
+        const shouldAutoSelectYearly =
+          detectedMode === 'yearly' &&
+          (!effectiveSheetName ||
+            (!options?.explicitTabSelection &&
+              reqTabYear === null &&
+              !isDashboardTab(effectiveSheetName)));
+
+        if (shouldAutoSelectYearly) {
+          const curCalYear = new Date().getFullYear();
+          const yearTabs = findAllYearTabs(formattedTabs);
+          const curYearTab = findTabForYear(formattedTabs, curCalYear);
+          targetSheet = curYearTab
+            ? curYearTab.title
+            : yearTabs.length > 0
+            ? yearTabs[0].title
+            : effectiveSheetName || String(curCalYear);
+        } else if (
           exactMatch &&
           !(detectedMode === 'yearly' && exactMatch.hidden && extractYearFromTab(exactMatch.title) === null)
         ) {
           targetSheet = exactMatch.title;
         } else if (reqTabYear !== null) {
           const matchedYearTab = findTabForYear(formattedTabs, reqTabYear);
-          targetSheet = matchedYearTab ? matchedYearTab.title : sheetName;
+          targetSheet = matchedYearTab ? matchedYearTab.title : effectiveSheetName;
         } else if (detectedMode === 'yearly') {
-          // Prefer current calendar year tab or latest available year tab
           const curCalYear = new Date().getFullYear();
           const yearTabs = findAllYearTabs(formattedTabs);
           const curYearTab = findTabForYear(formattedTabs, curCalYear);
@@ -604,24 +641,21 @@ export default function App() {
             targetSheet = yearTabs[0].title;
           } else if (reqMonthNum !== null) {
             const matchedTab = findTabForMonth(formattedTabs, reqMonthNum);
-            targetSheet = matchedTab ? matchedTab.title : sheetName;
+            targetSheet = matchedTab ? matchedTab.title : effectiveSheetName || `${reqMonthNum}월`;
           }
         } else if (reqMonthNum !== null) {
-          // Priority 1: Match tab for requested month (e.g. "1월", "01월", "1", "01", "1월 지출")
           const matchedTab = findTabForMonth(formattedTabs, reqMonthNum);
           if (matchedTab) {
             targetSheet = matchedTab.title;
           } else {
-            // Priority 2: Dedicated transaction tab (e.g. "지출내역", "가계부", "거래내역")
             const txTab = formattedTabs.find((t) => isTxTab(t.title));
             if (txTab) {
               targetSheet = txTab.title;
             } else {
-              targetSheet = sheetName;
+              targetSheet = effectiveSheetName || `${reqMonthNum}월`;
             }
           }
         } else {
-          // Non-month sheet requested
           const txTab = formattedTabs.find((t) => isTxTab(t.title));
           if (txTab) {
             targetSheet = txTab.title;
@@ -641,9 +675,17 @@ export default function App() {
         // Fetch sheet values without arbitrary row limit (fetch entire sheet A:Z)
         let rows: string[][] = [];
         try {
-          rows = await getSheetValues(sId, targetSheet, token, 'A:Z');
-        } catch (fetchErr) {
-          console.warn(`Sheet tab ${targetSheet} fetch warning:`, fetchErr);
+          rows = await getSheetValues(sId, targetSheet, activeToken, 'A:Z');
+          if (activeToken && !getSavedToken()) {
+            setAccessToken(null);
+          }
+        } catch (fetchErr: any) {
+          if (fetchErr?.message?.includes('AUTH_EXPIRED') || isAuthExpiredError(fetchErr)) {
+            setAccessToken(null);
+            setErrorNotice('Google 인증 세션이 만료되어 읽기 전용 상태입니다. 상단 [Google 로그인 (실시간 쓰기)]을 눌러 재인증해 주세요.');
+          } else {
+            console.warn(`Sheet tab ${targetSheet} fetch warning:`, fetchErr);
+          }
           rows = [];
         }
 
@@ -661,7 +703,7 @@ export default function App() {
           // If NOT on a unified year tab and a dashboard/matrix tab exists elsewhere, sync yearData in background
           const dashTab = formattedTabs.find((t) => isDashboardTab(t.title));
           if (targetTabYear === null && dashTab && targetSheet !== dashTab.title) {
-            getSheetValues(sId, dashTab.title, token, 'A:Z')
+            getSheetValues(sId, dashTab.title, activeToken, 'A:Z')
               .then((dashRows) => {
                 const matrix = extractYearMatrixData(dashRows);
                 if (matrix && matrix.categories.length > 0) {
@@ -746,7 +788,7 @@ export default function App() {
     }
 
     if (isRealGoogleConnected) {
-      loadSheetData(spreadsheetId, title, accessToken);
+      loadSheetData(spreadsheetId, title, accessToken, { explicitTabSelection: true });
     } else {
       // In offline/sample mode: keep complete transactions dataset intact
       // Dashboard will filter to the selected month seamlessly
@@ -763,7 +805,7 @@ export default function App() {
       setActiveSheetTitle(tabTitle);
       setActiveTab((prev) => (prev === 'analyzer' || prev === 'comparison' ? 'monthly' : prev));
       if (isRealGoogleConnected) {
-        loadSheetData(spreadsheetId, tabTitle, accessToken);
+        loadSheetData(spreadsheetId, tabTitle, accessToken, { explicitTabSelection: true });
       } else {
         setAnalysis((prev) => ({
           ...prev,
@@ -853,8 +895,7 @@ export default function App() {
       console.warn('Could not save spreadsheet to storage', e);
     }
 
-    const curMonth = `${new Date().getMonth() + 1}월`;
-    await loadSheetData(id, curMonth, token);
+    await loadSheetData(id, '', token);
   };
 
   // Google Login Handler
@@ -931,9 +972,8 @@ export default function App() {
         localStorage.setItem('smart_money_spreadsheet_id', cfg.id);
         localStorage.setItem('smart_money_spreadsheet_title', cfg.title);
       } catch {}
-      const curMonth = `${new Date().getMonth() + 1}월`;
       const token = accessToken || getSavedToken() || null;
-      await loadSheetData(cfg.id, curMonth, token);
+      await loadSheetData(cfg.id, '', token);
     },
     [accessToken, loadSheetData]
   );
@@ -1058,14 +1098,35 @@ export default function App() {
     });
 
     const gasUrl = typeof window !== 'undefined' ? localStorage.getItem('smart_money_gas_url') : null;
-    const canWriteToGoogle = Boolean(accessToken || gasUrl);
+    let currentAuthToken = accessToken || getSavedToken() || null;
+
+    if (isRealGoogleConnected && !currentAuthToken && !gasUrl) {
+      if (
+        confirm(
+          `Google 로그인 세션(1시간 유효)이 만료되어 현재 읽기 전용 상태입니다.\n\n지금 바로 Google 로그인으로 재인증하여 [${targetSheetTitle}] 시트에 즉시 기록할까요?\n([취소]를 누르면 기기에 임시 보관됩니다.)`
+        )
+      ) {
+        try {
+          const loginRes = await googleSignIn();
+          if (loginRes?.accessToken) {
+            currentAuthToken = loginRes.accessToken;
+            setAccessToken(loginRes.accessToken);
+            setUser(loginRes.user);
+          }
+        } catch (loginErr) {
+          console.warn('Inline re-login warning:', loginErr);
+        }
+      }
+    }
+
+    const canWriteToGoogle = Boolean(currentAuthToken || gasUrl);
 
     if (!canWriteToGoogle) {
-      if (isRealGoogleConnected && !accessToken) {
+      if (isRealGoogleConnected) {
         setSyncToast({
           show: true,
           type: 'error',
-          message: 'Google 시트에 즉시 반영하려면 Google 로그인 또는 [Apps Script 웹앱] 연동이 필요합니다. (화면에 임시 보관됨)',
+          message: `⚠️ Google 인증이 만료되어 [${targetSheetTitle}] 시트에 아직 전송되지 않았습니다. 상단 빨간 배너의 [구글 시트로 지금 즉시 내보내기]로 전송해 주세요.`,
         });
       } else {
         setSyncToast({
@@ -1115,7 +1176,7 @@ export default function App() {
         targetSheetTitle,
         analysis.mapping,
         newTx,
-        accessToken
+        currentAuthToken
       );
 
       if (newTx.subItems && newTx.subItems.length > 0 && appendRes?.rowIndex) {
@@ -1141,23 +1202,27 @@ export default function App() {
       setSyncToast({
         show: true,
         type: 'success',
-        message: gasUrl
-          ? `⚡ [Apps Script] 구글 시트 [${targetSheetTitle}] 탭에 영구 실시간 저장되었습니다!`
-          : `✅ Google 시트 [${targetSheetTitle}] 탭에 즉시 반영되었습니다!`,
+        message: currentAuthToken
+          ? `✅ Google 시트 [${targetSheetTitle}] 탭 ${appendRes.rowIndex}행에 즉시 반영되었습니다!`
+          : `⚡ [Apps Script] 구글 시트 [${targetSheetTitle}] 탭에 실시간 저장되었습니다!`,
       });
 
       // Reload to ensure real-time synchronization and correct row indices
       setActiveSheetTitle(targetSheetTitle);
-      await loadSheetData(spreadsheetId, targetSheetTitle, accessToken);
+      await loadSheetData(spreadsheetId, targetSheetTitle, currentAuthToken, {
+        explicitTabSelection: true,
+      });
     } catch (err: any) {
       console.error('Google Sheets append error:', err);
       // If token expired, prompt re-login and auto-retry immediately!
       if (err?.message?.includes('AUTH_EXPIRED') || String(err).includes('AUTH_EXPIRED') || isAuthExpiredError(err)) {
+        setAccessToken(null);
         try {
-          if (confirm('Google 인증 세션이 만료되어 구글 시트 전송이 대기되었습니다.\n지금 다시 로그인하여 시트에 즉시 기록하시겠습니까?')) {
+          if (confirm(`Google 인증 세션이 만료되어 [${targetSheetTitle}] 시트 전송이 대기되었습니다.\n지금 다시 로그인하여 시트에 즉시 기록하시겠습니까?`)) {
             const loginRes = await googleSignIn();
             if (loginRes?.accessToken) {
               setAccessToken(loginRes.accessToken);
+              setUser(loginRes.user);
               if (newTx.subItems && newTx.subItems.length > 0) {
                 saveSubItemsForTransaction(
                   { ...newTx, sheetTitle: targetSheetTitle },
@@ -1346,7 +1411,8 @@ export default function App() {
         spreadsheetId,
         targetSheetTab.id,
         tx.rowIndex,
-        accessToken
+        accessToken,
+        targetSheet
       );
       setSyncToast({
         show: true,
@@ -1369,7 +1435,8 @@ export default function App() {
               spreadsheetId,
               targetSheetTab.id,
               tx.rowIndex,
-              newToken
+              newToken,
+              targetSheet
             );
             setSyncToast({
               show: true,
@@ -2822,8 +2889,8 @@ export default function App() {
                     </span>
                   </div>
                   <p className="text-xs text-rose-900 mt-1 leading-relaxed">
-                    구글 인증 토큰 만료 또는 해당 월 탭 미생성으로 인해 기기에 임시 보관되어 있습니다.
-                    아래 버튼을 누르면 구글 시트의 해당 월 탭(예: <strong>10월</strong>)으로 즉시 저장됩니다.
+                    구글 인증 토큰 만료 또는 네트워크 오류로 인해 기기에 임시 보관되어 있습니다.
+                    아래 버튼을 누르면 구글 시트의 해당 탭(예: <strong>2026</strong> 또는 해당 월)으로 즉시 저장됩니다.
                   </p>
                 </div>
               </div>
@@ -3196,7 +3263,11 @@ export default function App() {
               activeSheetTitle={activeSheetTitle}
               spreadsheetTitle={spreadsheetTitle}
               spreadsheetId={spreadsheetId}
-              isRealGoogleConnected={isRealGoogleConnected}
+              isRealGoogleConnected={Boolean(
+                isRealGoogleConnected &&
+                  (accessToken ||
+                    (typeof window !== 'undefined' && localStorage.getItem('smart_money_gas_url')))
+              )}
               onAddTransaction={handleAddTransaction}
               onBatchAddTransactions={handleBatchAddTransactions}
               sheetTabs={sheetTabs}

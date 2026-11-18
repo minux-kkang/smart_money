@@ -1750,6 +1750,7 @@ export const ExpenseInputForm: React.FC<ExpenseInputFormProps> = ({
       }
     } catch (err: any) {
       console.error('Submit error:', err);
+      alert(`저장 중 오류가 발생했습니다: ${err?.message || err}`);
     } finally {
       setIsSubmitting(false);
     }
