@@ -764,7 +764,6 @@ export default function App() {
               });
             }
           }
-          setActiveTab((prev) => (prev === 'comparison' ? 'comparison' : 'monthly'));
         }
       } catch (err: any) {
         console.error('Failed to load sheet:', err);
@@ -802,7 +801,6 @@ export default function App() {
   const handleSelectYearTab = useCallback(
     (tabTitle: string) => {
       setActiveSheetTitle(tabTitle);
-      setActiveTab((prev) => (prev === 'comparison' ? 'monthly' : prev));
       if (isRealGoogleConnected) {
         loadSheetData(spreadsheetId, tabTitle, accessToken, { explicitTabSelection: true });
       } else {
