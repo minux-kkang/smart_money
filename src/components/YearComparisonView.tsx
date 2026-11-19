@@ -537,20 +537,20 @@ export const YearComparisonView: React.FC<YearComparisonViewProps> = ({
                 type="button"
                 onClick={() => handleLoadAllYears(true)}
                 disabled={isLoadingYears}
-                className="px-3 py-2 bg-white/10 hover:bg-white/20 text-white border border-white/20 rounded-xl text-xs font-bold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
+                className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/15 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isLoadingYears ? 'animate-spin' : ''}`} />
-                <span>{isLoadingYears ? loadingYearLabel || '불러오는 중...' : '전체 연도 새로고침'}</span>
+                <span>{isLoadingYears ? loadingYearLabel || '불러오는 중...' : '새로고침'}</span>
               </button>
             )}
 
             <button
               type="button"
               onClick={onOpenMigrationImport}
-              className="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md transition active:scale-95 cursor-pointer"
+              className="px-3 py-1.5 bg-white/10 hover:bg-white/20 text-white border border-white/15 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer"
             >
               <FolderInput className="w-3.5 h-3.5" />
-              <span>+ 다른 연도 파일 가져오기</span>
+              <span>연도 데이터 가져오기</span>
             </button>
           </div>
         </div>

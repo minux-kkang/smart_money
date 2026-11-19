@@ -1270,34 +1270,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     : `${activeTabYear || activeSheetTitle}년 ${selectedMonthFilter}월 잔액`
                   : `${activeSheetTitle} 잔액`}
               </span>
-              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-white/10 text-slate-300">
-                수입 - 지출
+              <span className="text-[10px] font-semibold text-slate-400 tabular-nums">
+                ({metrics.count.toLocaleString('ko-KR')}건)
               </span>
-              <span className="text-[10px] font-semibold text-slate-400">
-                ({metrics.count}건 기록)
-              </span>
-
-              {isRealGoogleConnected && onExportCurrentMonthToGoogleSheets && (
-                <button
-                  type="button"
-                  onClick={onExportCurrentMonthToGoogleSheets}
-                  disabled={isExportingMonth || metrics.count === 0}
-                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-[11px] font-bold text-white shadow-xs transition active:scale-95 cursor-pointer disabled:opacity-50 ml-1"
-                  title={`현재 화면의 ${metrics.count}건 내역을 구글 드라이브 가계부 시트에 [${activeSheetTitle}] 탭을 만들어 일괄 저장합니다.`}
-                >
-                  <CloudUpload className="w-3.5 h-3.5" />
-                  <span>
-                    {isExportingMonth
-                      ? '시트에 저장 중...'
-                      : `구글 시트에 [${activeSheetTitle}] 생성 & ${metrics.count}건 일괄 저장`}
-                  </span>
-                </button>
-              )}
-
-
             </div>
             <div
-              className={`text-xl sm:text-2xl font-black mt-0.5 tracking-tight ${
+              className={`text-xl sm:text-2xl font-black mt-0.5 tracking-tight tabular-nums ${
                 metrics.balance >= 0 ? 'text-emerald-400' : 'text-rose-400'
               }`}
             >
@@ -1310,13 +1288,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
           <div className="flex items-center gap-2 sm:gap-3 text-right shrink-0">
             <div className="hidden xs:block">
               <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium">일 평균 지출</span>
-              <span className="text-xs sm:text-sm font-bold text-slate-200">
+              <span className="text-xs sm:text-sm font-bold text-slate-200 tabular-nums">
                 {metrics.dailyAverageExpense.toLocaleString('ko-KR')}원
               </span>
             </div>
             <div className="pl-2 border-l border-white/15">
               <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium">저축/잉여율</span>
-              <span className="text-xs sm:text-sm font-black text-blue-300">
+              <span className="text-xs sm:text-sm font-black text-blue-300 tabular-nums">
                 {metrics.savingRate}%
               </span>
             </div>
@@ -1342,11 +1320,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <span>일자별 비교</span>
                 </span>
               </div>
-              <p className="text-sm sm:text-lg font-black text-rose-600 truncate mt-0.5">
+              <p className="text-sm sm:text-lg font-black text-rose-600 truncate mt-0.5 tabular-nums">
                 {metrics.activeTotalExpense.toLocaleString('ko-KR')}원
               </p>
               {excludeSpecialExpense && metrics.specialExpense > 0 && (
-                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200 inline-block truncate mt-0.5">
+                <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200 inline-block truncate mt-0.5 tabular-nums">
                   🛋️ 특별 지출 {metrics.specialExpense.toLocaleString('ko-KR')}원 제외 중
                 </span>
               )}
@@ -1365,7 +1343,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   {activeSheetTitle} 총 수입
                 </span>
               </div>
-              <p className="text-sm sm:text-lg font-black text-emerald-600 truncate mt-0.5">
+              <p className="text-sm sm:text-lg font-black text-emerald-600 truncate mt-0.5 tabular-nums">
                 {metrics.totalIncome.toLocaleString('ko-KR')}원
               </p>
             </div>

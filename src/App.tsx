@@ -48,10 +48,9 @@ import {
   organizePerpetualSheetStructure,
 } from './services/googleSheets';
 import { listSpreadsheets } from './services/googleDrive';
-import { Header } from './components/Header';
+import { Header, MainViewTab } from './components/Header';
 import { ExpenseInputForm } from './components/ExpenseInputForm';
 import { Dashboard } from './components/Dashboard';
-import { SpreadsheetAnalyzer } from './components/SpreadsheetAnalyzer';
 import { SpreadsheetPickerModal } from './components/SpreadsheetPickerModal';
 import { GitHubModal } from './components/GitHubModal';
 import { ConfirmationModal } from './components/ConfirmationModal';
@@ -61,6 +60,7 @@ import { CategoryManagementModal } from './components/CategoryManagementModal';
 import { DomainAuthModal } from './components/DomainAuthModal';
 import { UnifiedMigrationModal } from './components/UnifiedMigrationModal';
 import { RegisterYearSheetModal } from './components/RegisterYearSheetModal';
+import { SettingsModal } from './components/SettingsModal';
 import { SAMPLE_ANALYSIS, SAMPLE_TRANSACTIONS } from './data/sampleLedger';
 import {
   USER_2026_DATA,
@@ -94,20 +94,16 @@ import {
 } from './services/subItemStorage';
 import { registerPaymentMethods } from './utils/paymentGroupUtils';
 import {
-  FileSpreadsheet,
   BarChart3,
-  SearchCode,
-  Sparkles,
   AlertCircle,
   CheckCircle2,
   ExternalLink,
   Plus,
   Calendar,
-  Tag,
   RefreshCw,
   UploadCloud,
   TrendingUp,
-  ArrowRightLeft,
+  ShieldAlert,
 } from 'lucide-react';
 
 export default function App() {
@@ -378,8 +374,8 @@ export default function App() {
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const [errorNotice, setErrorNotice] = useState<string | null>(null);
 
-  // Active View Tab: 'matrix' | 'monthly' | 'comparison' | 'analyzer'
-  const [activeTab, setActiveTab] = useState<'matrix' | 'monthly' | 'comparison' | 'analyzer'>('matrix');
+  // Active View Tab: 'matrix' | 'monthly' | 'comparison'
+  const [activeTab, setActiveTab] = useState<MainViewTab>('matrix');
 
   const [yearData, setYearData] = useState<YearDashboardData>(USER_2026_DATA);
   const [isPickerOpen, setIsPickerOpen] = useState(false);
@@ -387,14 +383,8 @@ export default function App() {
   const [isInputModalOpen, setIsInputModalOpen] = useState(false);
   const [openImportOnModal, setOpenImportOnModal] = useState(false);
   const [isRegisterYearModalOpen, setIsRegisterYearModalOpen] = useState(false);
-  const [isMigrationBannerDismissed, setIsMigrationBannerDismissed] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    try {
-      return localStorage.getItem('smart_money_hide_perpetual_banner_v2') === 'true';
-    } catch {
-      return false;
-    }
-  });
+  const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'sheet' | 'categories' | 'advanced'>('sheet');
 
   // Multi-Year Sheets Registry state (e.g. 2026, 2025, 2024...)
   const [yearlySheets, setYearlySheets] = useState<Array<{ year: string; title: string; id: string; url?: string }>>(() => {
@@ -808,7 +798,7 @@ export default function App() {
   const handleSelectYearTab = useCallback(
     (tabTitle: string) => {
       setActiveSheetTitle(tabTitle);
-      setActiveTab((prev) => (prev === 'analyzer' || prev === 'comparison' ? 'monthly' : prev));
+      setActiveTab((prev) => (prev === 'comparison' ? 'monthly' : prev));
       if (isRealGoogleConnected) {
         loadSheetData(spreadsheetId, tabTitle, accessToken, { explicitTabSelection: true });
       } else {
@@ -2851,19 +2841,28 @@ export default function App() {
     };
   }, [isRealGoogleConnected, accessToken, spreadsheetId, activeSheetTitle, loadSheetData]);
 
+  const hasGasWebApp =
+    typeof window !== 'undefined' && Boolean(localStorage.getItem('smart_money_gas_url'));
+  const isLiveWritable = Boolean((isRealGoogleConnected && accessToken) || hasGasWebApp);
+
+  const handleOpenSettings = (tab: 'sheet' | 'categories' | 'advanced' = 'sheet') => {
+    setSettingsInitialTab(tab);
+    setIsSettingsModalOpen(true);
+  };
+
   return (
-    <div className="min-h-screen bg-slate-100/70 text-slate-900 font-sans antialiased flex flex-col">
+    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans antialiased flex flex-col">
       {/* Global Header */}
       <Header
         user={user}
         spreadsheetTitle={spreadsheetTitle}
-        spreadsheetUrl={spreadsheetUrl}
         sheetTabs={sheetTabs}
         activeSheetTitle={activeSheetTitle}
+        activeTab={activeTab}
+        onChangeTab={setActiveTab}
         onSelectSheet={handleSelectSheetTab}
-        onOpenSpreadsheetPicker={() => setIsPickerOpen(true)}
         onOpenQuickInput={() => setIsInputModalOpen(true)}
-        onOpenGitHubModal={() => setIsGitHubOpen(true)}
+        onOpenSettings={handleOpenSettings}
         onLogin={handleLogin}
         onLogout={handleLogout}
         onRefreshData={() => {
@@ -2872,206 +2871,155 @@ export default function App() {
           }
         }}
         isRefreshing={isLoadingData}
-        onOpenCategoryManager={() => setIsCategoryModalOpen(true)}
-        isRealGoogleConnected={Boolean(isRealGoogleConnected && accessToken)}
-        onOpenMigrationModal={() => handleOpenMigrationWithTab('consolidate')}
-        onOpenMigrationImport={() => handleOpenMigrationWithTab('import_external')}
+        isLoggingIn={isLoggingIn}
+        isSheetLinked={isRealGoogleConnected}
+        isLiveWritable={isLiveWritable}
         activeYear={activeYear}
         yearlySheets={yearlySheets}
         onSelectYearSheet={handleSelectYearSheet}
         onSelectYearTab={handleSelectYearTab}
-        onOpenRegisterYearModal={() => setIsRegisterYearModalOpen(true)}
         isYearlyUnifiedMode={isYearlyUnifiedMode}
+        hasSettingsAttention={Boolean(
+          isRealGoogleConnected && (!hasSettingsTab || needsPerpetualUpgrade)
+        )}
       />
 
       {/* Main Content Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-3.5 sm:py-5 space-y-3.5 sm:space-y-4">
-        {/* Compact Connection & Data Status Bar */}
-        {!isRealGoogleConnected ? (
-          <div className="px-3 py-2 bg-blue-50/90 border border-blue-200/80 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 shadow-2xs">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
-              <span className="font-bold text-blue-900 shrink-0 text-xs">
-                {user ? '구글 계정 인증됨' : '샘플 데이터 모드'}
-              </span>
-              <span className="hidden sm:inline text-slate-500 text-[11px] truncate">
-                {user
-                  ? '내 Google 드라이브 가계부 시트를 선택해 실시간 연동하세요.'
-                  : '실제 구글 시트 연동 또는 샘플 데이터로 기능 체험이 가능합니다.'}
-              </span>
+      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-5 space-y-4">
+        {/* Auth Guidance Banner — Shown ONLY when user is not logged in, sheet not linked, or auth expired */}
+        {!isLiveWritable && (
+          <div
+            className={`px-3.5 py-2.5 rounded-xl border text-xs flex flex-wrap items-center justify-between gap-2.5 ${
+              isRealGoogleConnected && !accessToken
+                ? 'bg-amber-50 border-amber-200 text-amber-950'
+                : 'bg-blue-50/80 border-blue-200 text-slate-800'
+            }`}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <ShieldAlert
+                className={`w-4 h-4 shrink-0 ${
+                  isRealGoogleConnected && !accessToken ? 'text-amber-600' : 'text-blue-600'
+                }`}
+              />
+              <div className="min-w-0">
+                {!user ? (
+                  <p className="font-semibold text-slate-900">
+                    Google 로그인이 필요합니다.{' '}
+                    <span className="font-normal text-slate-600">
+                      로그인하면 내 구글 시트와 실시간으로 자동 저장됩니다.
+                    </span>
+                  </p>
+                ) : !isRealGoogleConnected ? (
+                  <p className="font-semibold text-slate-900">
+                    연동할 구글 시트를 선택해 주세요.{' '}
+                    <span className="font-normal text-slate-600">
+                      내 Google 드라이브의 가계부 시트를 선택하면 즉시 동기화됩니다.
+                    </span>
+                  </p>
+                ) : (
+                  <p className="font-semibold text-amber-950">
+                    Google 인증이 만료되어 읽기 전용 상태입니다.{' '}
+                    <span className="font-normal text-amber-800">
+                      다시 로그인하면 입력·수정·삭제가 시트에 즉시 반영됩니다.
+                    </span>
+                  </p>
+                )}
+              </div>
             </div>
-            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-              <button
-                onClick={() => handleOpenMigrationWithTab('consolidate')}
-                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[11px] font-black transition shadow-xs cursor-pointer flex items-center gap-1"
-              >
-                <Sparkles className="w-3 h-3" />
-                <span>만년 가계부 전환</span>
-              </button>
-              <button
-                onClick={() => setIsPickerOpen(true)}
-                className="px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[11px] font-bold transition cursor-pointer"
-              >
-                직접 등록
-              </button>
-              {user ? (
+
+            <div className="flex items-center gap-2 shrink-0">
+              {!user ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleLogin}
+                    disabled={isLoggingIn}
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition cursor-pointer disabled:opacity-60"
+                  >
+                    {isLoggingIn ? '로그인 중...' : 'Google 로그인'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsPickerOpen(true)}
+                    className="px-2.5 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition cursor-pointer"
+                  >
+                    시트 직접 연결
+                  </button>
+                </>
+              ) : !isRealGoogleConnected ? (
                 <button
+                  type="button"
                   onClick={() => setIsPickerOpen(true)}
-                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[11px] font-bold shadow-xs transition active:scale-95 cursor-pointer"
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition cursor-pointer"
                 >
-                  시트 선택
+                  구글 시트 선택
                 </button>
               ) : (
                 <button
+                  type="button"
                   onClick={handleLogin}
                   disabled={isLoggingIn}
-                  className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[11px] font-bold shadow-xs transition active:scale-95 cursor-pointer"
+                  className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition cursor-pointer disabled:opacity-60"
                 >
-                  {isLoggingIn ? '연결 중...' : 'Google 로그인'}
+                  {isLoggingIn ? '인증 중...' : 'Google 다시 로그인'}
                 </button>
               )}
-            </div>
-          </div>
-        ) : accessToken ? (
-          <div className="px-3 py-2 bg-emerald-50/90 border border-emerald-200/80 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 shadow-2xs">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-              <span className="font-black text-emerald-950 shrink-0 text-xs flex items-center gap-1">
-                <span>Google 시트 실시간 즉시 반영 켜짐</span>
-              </span>
-              <span className="text-slate-400 shrink-0 hidden sm:inline">|</span>
-              <span className="font-semibold text-slate-700 truncate max-w-[140px] sm:max-w-[280px]" title={spreadsheetTitle}>
-                {spreadsheetTitle}
-              </span>
-              <span className="hidden md:inline text-[11px] text-emerald-700 font-medium shrink-0">
-                ({activeSheetTitle} • 입력/수정/삭제 시 시트 원본 실시간 저장)
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-              <button
-                onClick={() => handleOpenMigrationWithTab('consolidate')}
-                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[11px] font-black transition shadow-xs cursor-pointer flex items-center gap-1"
-                title="현재 구글 시트를 만년 가계부([📊 연도별 요약] + 연도별 탭) 구조로 변환/관리합니다"
-              >
-                <Sparkles className="w-3 h-3" />
-                <span>만년 가계부 전환</span>
-              </button>
-              {spreadsheetUrl && (
-                <a
-                  href={spreadsheetUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-2 py-1 bg-white hover:bg-emerald-100/70 border border-emerald-200 text-emerald-800 rounded-lg text-[11px] font-bold transition flex items-center gap-1"
-                  title="Google Sheets 원본 열기"
-                >
-                  <ExternalLink className="w-3 h-3" />
-                  <span className="hidden xs:inline">시트 열기</span>
-                </a>
-              )}
-              <button
-                onClick={() => setIsPickerOpen(true)}
-                className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[11px] font-bold transition cursor-pointer"
-              >
-                시트 변경
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="px-3 py-2 bg-amber-50/95 border border-amber-200/80 rounded-xl text-xs flex flex-wrap items-center justify-between gap-2 shadow-2xs">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0" />
-              <span className="font-bold text-amber-950 shrink-0 text-xs">읽기 전용 모드</span>
-              <span className="text-amber-400 shrink-0 hidden sm:inline">|</span>
-              <span className="font-semibold text-slate-700 truncate max-w-[140px] sm:max-w-[240px]" title={spreadsheetTitle}>
-                {spreadsheetTitle}
-              </span>
-              <span className="hidden lg:inline text-[11px] text-amber-800 font-medium shrink-0">
-                (Google 시트 원본에 즉시 쓰려면 Google 로그인이 필요합니다)
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-              <button
-                onClick={() => handleOpenMigrationWithTab('consolidate')}
-                className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-[11px] font-black transition shadow-xs cursor-pointer flex items-center gap-1"
-              >
-                <Sparkles className="w-3 h-3" />
-                <span>만년 가계부 전환</span>
-              </button>
-              <button
-                onClick={handleLogin}
-                disabled={isLoggingIn}
-                className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-bold transition shadow-xs cursor-pointer flex items-center gap-1"
-              >
-                <Sparkles className="w-3 h-3" />
-                <span>{isLoggingIn ? '로그인 중...' : 'Google 로그인 (실시간 쓰기)'}</span>
-              </button>
-              <button
-                onClick={() => setIsPickerOpen(true)}
-                className="px-2 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-lg text-[11px] font-bold transition cursor-pointer"
-              >
-                시트 변경
-              </button>
             </div>
           </div>
         )}
 
-
-
-        {/* Unsynced Local Data Notice & One-Click Push */}
+        {/* Unsynced Local Data Notice & One-Click Push (Shown only if pending items exist) */}
         {pendingSyncList.length > 0 && (
-          <div className="bg-gradient-to-r from-amber-50 via-rose-50 to-orange-50 border-2 border-rose-400 rounded-2xl p-4 sm:p-5 shadow-sm animate-in fade-in space-y-3">
+          <div className="bg-rose-50/90 border border-rose-300 rounded-xl p-4 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-start sm:items-center gap-3">
-                <div className="w-10 h-10 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-sm mt-0.5 sm:mt-0">
-                  <UploadCloud className="w-5 h-5 animate-pulse" />
+                <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0">
+                  <UploadCloud className="w-4 h-4" />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h4 className="text-sm sm:text-base font-black text-rose-950">
-                      🚨 구글 시트에 아직 전송되지 않은 내역 {pendingSyncList.length}건이 안전하게 대기 중입니다!
-                    </h4>
-                    <span className="px-2 py-0.5 rounded-full text-[11px] font-extrabold bg-rose-200 text-rose-900 border border-rose-300">
-                      기기(로컬) 보관 중
-                    </span>
-                  </div>
-                  <p className="text-xs text-rose-900 mt-1 leading-relaxed">
-                    구글 인증 토큰 만료 또는 네트워크 오류로 인해 기기에 임시 보관되어 있습니다.
-                    아래 버튼을 누르면 구글 시트의 해당 탭(예: <strong>2026</strong> 또는 해당 월)으로 즉시 저장됩니다.
+                  <h4 className="text-xs sm:text-sm font-bold text-rose-950">
+                    구글 시트에 아직 전송되지 않은 내역 {pendingSyncList.length}건이 대기 중입니다
+                  </h4>
+                  <p className="text-xs text-rose-800 mt-0.5">
+                    인증 만료 또는 네트워크 오류로 로컬에 안전하게 보관 중입니다. 버튼을 누르면 시트로 즉시 저장됩니다.
                   </p>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
-                <button
-                  onClick={handleSyncPendingToGoogle}
-                  disabled={isSyncingPending}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white rounded-xl text-xs sm:text-sm font-black shadow-md transition cursor-pointer disabled:opacity-50"
-                >
-                  {isSyncingPending ? (
-                    <RefreshCw className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <UploadCloud className="w-4 h-4" />
-                  )}
-                  <span>구글 시트로 지금 즉시 내보내기 ({pendingSyncList.length}건)</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={handleSyncPendingToGoogle}
+                disabled={isSyncingPending}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 active:scale-95 text-white rounded-lg text-xs font-bold transition cursor-pointer disabled:opacity-50 shrink-0 self-end sm:self-auto"
+              >
+                {isSyncingPending ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <UploadCloud className="w-3.5 h-3.5" />
+                )}
+                <span>시트로 즉시 전송 ({pendingSyncList.length}건)</span>
+              </button>
             </div>
 
-            {/* List preview of pending items */}
-            <div className="bg-white/90 rounded-xl p-3 border border-rose-200 divide-y divide-rose-100 max-h-48 overflow-y-auto">
+            <div className="bg-white rounded-lg p-3 border border-rose-200 divide-y divide-rose-100 max-h-44 overflow-y-auto">
               <div className="text-[11px] font-bold text-rose-800 pb-2 px-1 flex justify-between items-center">
-                <span>전송 대기 목록 ({pendingSyncList.length}건):</span>
-                <span>총 {pendingSyncList.reduce((acc, cur) => acc + (cur.amount || 0), 0).toLocaleString()}원</span>
+                <span>전송 대기 목록 ({pendingSyncList.length}건)</span>
+                <span className="tabular-nums">
+                  총 {pendingSyncList.reduce((acc, cur) => acc + (cur.amount || 0), 0).toLocaleString()}원
+                </span>
               </div>
               {pendingSyncList.map((tx, idx) => (
                 <div key={tx.id || idx} className="py-2 px-1 flex items-center justify-between text-xs text-slate-700 gap-2">
                   <div className="flex items-center gap-2 min-w-0 flex-1">
-                    <span className="font-bold text-rose-700 text-[11px] shrink-0">{tx.date || '날짜 미지정'}</span>
-                    <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] shrink-0 font-medium">{tx.category}</span>
-                    <span className="truncate font-semibold text-slate-800">{tx.description}</span>
-                    {tx.paymentMethod && <span className="text-[10px] text-slate-400 shrink-0 hidden xs:inline">({tx.paymentMethod})</span>}
+                    <span className="font-semibold text-rose-700 text-[11px] shrink-0 tabular-nums">
+                      {tx.date || '날짜 미지정'}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 text-[10px] shrink-0 font-medium">
+                      {tx.category}
+                    </span>
+                    <span className="truncate font-medium text-slate-800">{tx.description}</span>
                   </div>
-                  <span className="font-black text-rose-900 shrink-0 ml-2">
+                  <span className="font-bold text-rose-900 shrink-0 ml-2 tabular-nums">
                     {tx.amount?.toLocaleString()}원
                   </span>
                 </div>
@@ -3080,96 +3028,9 @@ export default function App() {
           </div>
         )}
 
-        {/* Notice Banner: Offer 1-click transition of Google Sheet to Smart Perpetual Ledger */}
-        {isRealGoogleConnected &&
-          needsPerpetualUpgrade &&
-          !isMigrationBannerDismissed && (
-            <div className="bg-gradient-to-r from-indigo-500/10 via-blue-500/10 to-violet-500/10 border border-indigo-200 rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-              <div className="flex items-start sm:items-center gap-3">
-                <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5 sm:mt-0">
-                  <ArrowRightLeft className="w-4 h-4" />
-                </div>
-                <div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h4 className="text-xs sm:text-sm font-black text-slate-900">
-                      현재 구글 시트를 [스마트 만년 가계부] 구조로 전환하기
-                    </h4>
-                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-100 text-indigo-800 border border-indigo-200">
-                      구글 시트 직접 통합
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-600 mt-0.5">
-                    1~12월 탭을 <strong>[{activeYear}]</strong> 탭으로 합치고, 구글 시트 내 <strong>[📊 연도별 요약]</strong> 수식 탭 생성·파일명 변경·기존 월 탭 숨김까지 원클릭으로 변환합니다.
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
-                <button
-                  onClick={() => handleOpenMigrationWithTab('consolidate')}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 active:scale-95 text-white rounded-xl text-xs font-black shadow-xs transition cursor-pointer"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>만년 가계부 전환 실행</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsMigrationBannerDismissed(true);
-                    try {
-                      localStorage.setItem('smart_money_hide_perpetual_banner_v2', 'true');
-                    } catch {}
-                  }}
-                  className="px-2 py-1.5 text-[11px] font-bold text-slate-500 hover:text-slate-700 cursor-pointer"
-                >
-                  숨기기
-                </button>
-              </div>
-            </div>
-          )}
-
-        {/* Notice Banner: Missing [분류설정] Tab in currently connected sheet */}
-        {!hasSettingsTab && (
-          <div className="bg-gradient-to-r from-amber-500/10 via-orange-500/10 to-blue-500/10 border border-amber-300 rounded-2xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
-            <div className="flex items-start sm:items-center gap-3">
-              <div className="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-xs mt-0.5 sm:mt-0">
-                <Tag className="w-4 h-4" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h4 className="text-xs sm:text-sm font-black text-slate-900">
-                    현재 가계부 시트에 [⚙️ 분류설정] 탭 추가하기
-                  </h4>
-                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-200/80 text-amber-900 border border-amber-300">
-                    시트 연동 권장
-                  </span>
-                </div>
-                <p className="text-xs text-slate-600 mt-0.5">
-                  구글 시트에도 <strong>[분류설정]</strong> 탭을 만들면 식비/외식 등 카테고리와 결제수단이 시트와 실시간으로 연동됩니다.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
-              <button
-                onClick={handleQuickCreateSettingsTab}
-                disabled={isCreatingSettingsTab}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white rounded-xl text-xs font-black shadow-xs transition cursor-pointer disabled:opacity-50"
-              >
-                {isCreatingSettingsTab ? (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                ) : (
-                  <Plus className="w-3.5 h-3.5" />
-                )}
-                <span>현재 시트에 [분류설정] 탭 생성</span>
-              </button>
-            </div>
-          </div>
-        )}
-
         {/* Error Notice */}
         {errorNotice && (
-          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex flex-wrap items-center justify-between gap-2 shadow-2xs">
+          <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0 flex-1">
               <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
               <span className="font-medium">{errorNotice}</span>
@@ -3179,13 +3040,14 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsDomainAuthModalOpen(true)}
-                  className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[11px] font-bold shadow-2xs transition cursor-pointer flex items-center gap-1"
+                  className="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1"
                 >
                   <ExternalLink className="w-3 h-3" />
-                  <span>30초 도메인 승인 방법 ↗</span>
+                  <span>도메인 승인 방법</span>
                 </button>
               )}
               <button
+                type="button"
                 onClick={() => setErrorNotice(null)}
                 className="text-xs font-bold text-rose-600 hover:underline cursor-pointer px-1 py-0.5"
               >
@@ -3195,58 +3057,46 @@ export default function App() {
           </div>
         )}
 
-        {/* Sleek Segmented View Switcher & Current Sheet Info */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-          {/* Segmented Control Tabs */}
-          <div className="flex items-center p-1 bg-slate-100 rounded-xl border border-slate-200/80 w-full sm:w-auto overflow-x-auto scrollbar-none">
-            <button
-              onClick={() => setActiveTab('matrix')}
-              className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
-                activeTab === 'matrix'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <BarChart3 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-              <span>연간 매트릭스</span>
-            </button>
+        {/* Mobile / Tablet View Switcher (Desktop uses Header center nav) */}
+        <div className="flex lg:hidden items-center p-1 bg-slate-200/70 rounded-xl w-full">
+          <button
+            type="button"
+            onClick={() => setActiveTab('matrix')}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+              activeTab === 'matrix'
+                ? 'bg-white text-slate-900 shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <BarChart3 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span>연간 매트릭스</span>
+          </button>
 
-            <button
-              onClick={() => setActiveTab('monthly')}
-              className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
-                activeTab === 'monthly'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-              <span>월별 가계부 ({activeSheetTitle})</span>
-            </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('monthly')}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+              activeTab === 'monthly'
+                ? 'bg-white text-slate-900 shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Calendar className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            <span>월별 가계부</span>
+          </button>
 
-            <button
-              onClick={() => setActiveTab('comparison')}
-              className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
-                activeTab === 'comparison'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <TrendingUp className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-              <span>연도별 비교</span>
-            </button>
-
-            <button
-              onClick={() => setActiveTab('analyzer')}
-              className={`flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
-                activeTab === 'analyzer'
-                  ? 'bg-white text-slate-900 shadow-xs'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-            >
-              <SearchCode className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-              <span>시트 분석</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab('comparison')}
+            className={`flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap ${
+              activeTab === 'comparison'
+                ? 'bg-white text-slate-900 shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <TrendingUp className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+            <span>연도별 비교</span>
+          </button>
         </div>
 
         {/* Full Width Main Display Area */}
@@ -3320,7 +3170,7 @@ export default function App() {
               yearData={yearData}
               isYearlyUnifiedMode={isYearlyUnifiedMode}
             />
-          ) : activeTab === 'comparison' ? (
+          ) : (
             <YearComparisonView
               spreadsheetId={spreadsheetId}
               spreadsheetTitle={spreadsheetTitle}
@@ -3345,14 +3195,6 @@ export default function App() {
                   });
                 }
               }}
-            />
-          ) : (
-            <SpreadsheetAnalyzer
-              analysis={analysis}
-              spreadsheetUrl={spreadsheetUrl}
-              onUpdateMapping={handleUpdateMapping}
-              onAddMonthTab={handleAddMonthTab}
-              isRealGoogleConnected={Boolean(isRealGoogleConnected && accessToken)}
             />
           )}
         </div>
@@ -3556,6 +3398,48 @@ export default function App() {
           setIsMigrationModalOpen(false);
           setIsPickerOpen(true);
         }}
+      />
+
+      {/* Unified Settings & Sheet Management Hub Modal */}
+      <SettingsModal
+        isOpen={isSettingsModalOpen}
+        onClose={() => setIsSettingsModalOpen(false)}
+        initialTab={settingsInitialTab}
+        user={user}
+        accessToken={accessToken}
+        isRealGoogleConnected={isRealGoogleConnected}
+        isLoggingIn={isLoggingIn}
+        spreadsheetTitle={spreadsheetTitle}
+        spreadsheetUrl={spreadsheetUrl}
+        activeSheetTitle={activeSheetTitle}
+        activeYear={activeYear}
+        yearlySheets={yearlySheets}
+        isYearlyUnifiedMode={isYearlyUnifiedMode}
+        needsPerpetualUpgrade={needsPerpetualUpgrade}
+        hasSettingsTab={hasSettingsTab}
+        isCreatingSettingsTab={isCreatingSettingsTab}
+        isRefreshing={isLoadingData}
+        isExportingMonth={isExportingMonth}
+        transactionCount={transactions.length}
+        customCategories={customCategories}
+        customPaymentMethods={customPaymentMethods}
+        analysis={analysis}
+        onLogin={handleLogin}
+        onLogout={handleLogout}
+        onRefreshData={() => {
+          if (isRealGoogleConnected && accessToken) {
+            loadSheetData(spreadsheetId, activeSheetTitle, accessToken);
+          }
+        }}
+        onOpenSpreadsheetPicker={() => setIsPickerOpen(true)}
+        onOpenMigrationModal={(tab) => handleOpenMigrationWithTab(tab)}
+        onOpenRegisterYearModal={() => setIsRegisterYearModalOpen(true)}
+        onQuickCreateSettingsTab={handleQuickCreateSettingsTab}
+        onOpenCategoryManager={() => setIsCategoryModalOpen(true)}
+        onOpenGitHubModal={() => setIsGitHubOpen(true)}
+        onExportCurrentMonthToGoogleSheets={handleExportCurrentMonthToGoogleSheets}
+        onUpdateMapping={handleUpdateMapping}
+        onAddMonthTab={handleAddMonthTab}
       />
     </div>
   );
