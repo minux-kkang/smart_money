@@ -67,12 +67,12 @@ import {
   deleteInstallmentPlan,
   InstallmentPlan,
 } from '../services/installmentStorage';
-import { extractYearFromTab } from '../services/googleSheets';
+import { extractYearFromTab, findAllYearTabs } from '../services/googleSheets';
 
 interface DashboardProps {
   transactions: Transaction[];
   activeSheetTitle: string;
-  sheetTabs?: Array<{ id: number; title: string }>;
+  sheetTabs?: Array<{ id: number; title: string; hidden?: boolean }>;
   onSelectSheetTab?: (title: string) => void;
   onEditTransaction: (transaction: Transaction) => Promise<void>;
   onDeleteTransaction: (transaction: Transaction) => Promise<void>;
@@ -109,6 +109,9 @@ interface DashboardProps {
   onFetchMonthTransactions?: (monthNum: number) => Promise<Transaction[]>;
   yearData?: YearDashboardData;
   isYearlyUnifiedMode?: boolean;
+  activeYear?: string;
+  onSelectYearTab?: (tabTitle: string) => void;
+  requestedMonth?: { month: string; seq: number } | null;
 }
 
 export function extractMonthFromDate(dateStr?: string, sheetTitle?: string): number | null {
@@ -194,6 +197,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onFetchMonthTransactions,
   yearData,
   isYearlyUnifiedMode = false,
+  activeYear,
+  onSelectYearTab,
+  requestedMonth,
 }) => {
   // Daily Pace Comparison Modal state (User request: 11월 총 지출 클릭 시 지난 달들과 일자별 지출 비교 그래프)
   const [isDailyPaceModalOpen, setIsDailyPaceModalOpen] = useState<boolean>(false);
@@ -266,11 +272,79 @@ export const Dashboard: React.FC<DashboardProps> = ({
   // Selected spending type (고정예산, 일반지출, 특별지출) for drill-down popup modal
   const [selectedSpendingTypeDetail, setSelectedSpendingTypeDetail] = useState<'recurring' | 'routine' | 'special' | null>(null);
 
-  // Month selector auto-scroll refs
-  const monthScrollContainerRef = React.useRef<HTMLDivElement>(null);
-  const activeMonthBadgeRef = React.useRef<HTMLButtonElement>(null);
+  // Collapsible search & filter bar (folded by default for clean UI)
+  const [isSearchExpanded, setIsSearchExpanded] = useState<boolean>(false);
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
 
-  // Month navigation helpers for swipe and arrow navigation
+  // Unified Continuous Year-Month Picker Popover state
+  const [isPeriodPickerOpen, setIsPeriodPickerOpen] = useState<boolean>(false);
+  const periodPickerRef = React.useRef<HTMLDivElement>(null);
+  const pendingTargetMonthRef = React.useRef<string | null>(null);
+
+  // Available year tabs inside this perpetual ledger file (sorted ascending, e.g. [2025, 2026])
+  const availableYearTabs = useMemo(() => {
+    return findAllYearTabs(sheetTabs).sort((a, b) => a.year - b.year);
+  }, [sheetTabs]);
+
+  const currentYearNum = useMemo(() => {
+    if (activeTabYear !== null) return activeTabYear;
+    if (activeYear) {
+      const parsed = parseInt(activeYear, 10);
+      if (!isNaN(parsed)) return parsed;
+    }
+    return new Date().getFullYear();
+  }, [activeTabYear, activeYear]);
+
+  const currentYearTabIndex = useMemo(
+    () => availableYearTabs.findIndex((t) => t.year === currentYearNum),
+    [availableYearTabs, currentYearNum]
+  );
+
+  const prevYearTab = useMemo(() => {
+    if (availableYearTabs.length === 0) return null;
+    if (currentYearTabIndex > 0) return availableYearTabs[currentYearTabIndex - 1];
+    const lower = availableYearTabs.filter((t) => t.year < currentYearNum);
+    return lower.length > 0 ? lower[lower.length - 1] : null;
+  }, [availableYearTabs, currentYearTabIndex, currentYearNum]);
+
+  const nextYearTab = useMemo(() => {
+    if (availableYearTabs.length === 0) return null;
+    if (currentYearTabIndex >= 0 && currentYearTabIndex < availableYearTabs.length - 1) {
+      return availableYearTabs[currentYearTabIndex + 1];
+    }
+    const higher = availableYearTabs.filter((t) => t.year > currentYearNum);
+    return higher.length > 0 ? higher[0] : null;
+  }, [availableYearTabs, currentYearTabIndex, currentYearNum]);
+
+  // Close period picker on outside click
+  React.useEffect(() => {
+    if (!isPeriodPickerOpen) return;
+    const handleOutside = (e: MouseEvent) => {
+      if (periodPickerRef.current && !periodPickerRef.current.contains(e.target as Node)) {
+        setIsPeriodPickerOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [isPeriodPickerOpen]);
+
+  // Focus search input when expanded
+  React.useEffect(() => {
+    if (isSearchExpanded && searchInputRef.current) {
+      searchInputRef.current.focus();
+    }
+  }, [isSearchExpanded]);
+
+  const switchToYearTabWithMonth = (targetTabTitle: string, targetMonth: string) => {
+    pendingTargetMonthRef.current = targetMonth;
+    if (onSelectYearTab) {
+      onSelectYearTab(targetTabTitle);
+    } else if (onSelectSheetTab) {
+      onSelectSheetTab(targetTabTitle);
+    }
+  };
+
+  // Month navigation helpers with seamless cross-year continuity
   const getCurrentMonthNumber = (): number => {
     const parsed = parseInt(selectedMonthFilter, 10);
     if (!isNaN(parsed) && parsed >= 1 && parsed <= 12) return parsed;
@@ -279,23 +353,88 @@ export const Dashboard: React.FC<DashboardProps> = ({
     return new Date().getMonth() + 1;
   };
 
-  const goToPrevMonth = () => {
+  const canGoPrevPeriod = useMemo(() => {
+    if (selectedMonthFilter === 'all') return Boolean(prevYearTab);
     const cur = getCurrentMonthNumber();
-    const prev = cur > 1 ? cur - 1 : 12;
-    setSelectedMonthFilter(String(prev));
-    if (onSelectSheetTab && !isYearlyUnifiedTab) onSelectSheetTab(`${prev}월`);
+    if (cur > 1) return true;
+    return isYearlyUnifiedTab ? Boolean(prevYearTab) : true;
+  }, [selectedMonthFilter, prevYearTab, isYearlyUnifiedTab, activeSheetTitle]);
+
+  const canGoNextPeriod = useMemo(() => {
+    if (selectedMonthFilter === 'all') return Boolean(nextYearTab);
+    const cur = getCurrentMonthNumber();
+    if (cur < 12) return true;
+    return isYearlyUnifiedTab ? Boolean(nextYearTab) : true;
+  }, [selectedMonthFilter, nextYearTab, isYearlyUnifiedTab, activeSheetTitle]);
+
+  const goToPrevMonth = () => {
+    if (selectedMonthFilter === 'all') {
+      if (prevYearTab) {
+        switchToYearTabWithMonth(prevYearTab.title, 'all');
+      }
+      return;
+    }
+    const cur = getCurrentMonthNumber();
+    if (cur > 1) {
+      const prev = cur - 1;
+      setSelectedMonthFilter(String(prev));
+      if (onSelectSheetTab && !isYearlyUnifiedTab) onSelectSheetTab(`${prev}월`);
+    } else if (isYearlyUnifiedTab && prevYearTab) {
+      // Seamless cross-year transition: e.g. 2026년 1월 -> 2025년 12월
+      switchToYearTabWithMonth(prevYearTab.title, '12');
+    } else if (!isYearlyUnifiedTab) {
+      setSelectedMonthFilter('12');
+      if (onSelectSheetTab) onSelectSheetTab('12월');
+    }
   };
 
   const goToNextMonth = () => {
+    if (selectedMonthFilter === 'all') {
+      if (nextYearTab) {
+        switchToYearTabWithMonth(nextYearTab.title, 'all');
+      }
+      return;
+    }
     const cur = getCurrentMonthNumber();
-    const next = cur < 12 ? cur + 1 : 1;
-    setSelectedMonthFilter(String(next));
-    if (onSelectSheetTab && !isYearlyUnifiedTab) onSelectSheetTab(`${next}월`);
+    if (cur < 12) {
+      const next = cur + 1;
+      setSelectedMonthFilter(String(next));
+      if (onSelectSheetTab && !isYearlyUnifiedTab) onSelectSheetTab(`${next}월`);
+    } else if (isYearlyUnifiedTab && nextYearTab) {
+      // Seamless cross-year transition: e.g. 2025년 12월 -> 2026년 1월
+      switchToYearTabWithMonth(nextYearTab.title, '1');
+    } else if (!isYearlyUnifiedTab) {
+      setSelectedMonthFilter('1');
+      if (onSelectSheetTab) onSelectSheetTab('1월');
+    }
+  };
+
+  const handleJumpToCurrentMonth = () => {
+    const now = new Date();
+    const nowYear = now.getFullYear();
+    const nowMonth = String(now.getMonth() + 1);
+    if (isYearlyUnifiedTab && currentYearNum !== nowYear) {
+      const nowYearTab = availableYearTabs.find((t) => t.year === nowYear);
+      if (nowYearTab) {
+        switchToYearTabWithMonth(nowYearTab.title, nowMonth);
+        setIsPeriodPickerOpen(false);
+        return;
+      }
+    }
+    setSelectedMonthFilter(nowMonth);
+    if (onSelectSheetTab && !isYearlyUnifiedTab) onSelectSheetTab(`${nowMonth}월`);
+    setIsPeriodPickerOpen(false);
   };
 
   // Sync month filter when activeSheetTitle changes to a specific month or year tab
   React.useEffect(() => {
     if (!activeSheetTitle) return;
+    if (pendingTargetMonthRef.current) {
+      const target = pendingTargetMonthRef.current;
+      pendingTargetMonthRef.current = null;
+      setSelectedMonthFilter(target);
+      return;
+    }
     const tabYear = extractYearFromTab(activeSheetTitle);
     if (tabYear !== null) {
       setSelectedMonthFilter(
@@ -312,30 +451,40 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   }, [activeSheetTitle]);
 
-  // Auto-scroll the month filter bar so the active month badge is centered in view
+  // Honor explicit month jump from AnnualMatrixView (e.g. clicking 3월 bar while browsing 2025년)
   React.useEffect(() => {
-    const scrollToActiveBadge = () => {
-      if (activeMonthBadgeRef.current && monthScrollContainerRef.current) {
-        const container = monthScrollContainerRef.current;
-        const target = activeMonthBadgeRef.current;
-        const targetLeft = target.offsetLeft;
-        const targetWidth = target.offsetWidth;
-        const containerWidth = container.offsetWidth;
-        const scrollGoal = targetLeft - containerWidth / 2 + targetWidth / 2;
+    if (requestedMonth?.month) {
+      setSelectedMonthFilter(requestedMonth.month);
+    }
+  }, [requestedMonth]);
 
-        container.scrollTo({
-          left: Math.max(0, scrollGoal),
-          behavior: 'smooth',
-        });
+  const monthCountsMap = useMemo(() => {
+    const counts: Record<number, number> = {};
+    transactions.forEach((t) => {
+      const m = extractMonthFromDate(t.date, t.sheetTitle);
+      if (m && m >= 1 && m <= 12) {
+        counts[m] = (counts[m] || 0) + 1;
       }
-    };
+    });
+    return counts;
+  }, [transactions]);
 
-    // Immediate attempt
-    scrollToActiveBadge();
-    // Re-check after DOM reflow and font metrics settle
-    const timer = setTimeout(scrollToActiveBadge, 150);
-    return () => clearTimeout(timer);
-  }, [selectedMonthFilter, activeSheetTitle]);
+  const activePeriodLabel = useMemo(() => {
+    if (isYearlyUnifiedTab) {
+      return selectedMonthFilter === 'all'
+        ? `${currentYearNum}년 전체`
+        : `${currentYearNum}년 ${selectedMonthFilter}월`;
+    }
+    return selectedMonthFilter === 'all' ? `${currentYearNum}년 전체` : `${selectedMonthFilter}월`;
+  }, [isYearlyUnifiedTab, selectedMonthFilter, currentYearNum]);
+
+  const isTodaySelected = useMemo(() => {
+    const now = new Date();
+    return (
+      currentYearNum === now.getFullYear() &&
+      selectedMonthFilter === String(now.getMonth() + 1)
+    );
+  }, [currentYearNum, selectedMonthFilter]);
 
   // Multi-select row selection
   const [isSelectionMode, setIsSelectionMode] = useState<boolean>(false);
@@ -1256,72 +1405,249 @@ export const Dashboard: React.FC<DashboardProps> = ({
     selectedIds.size > 0 && selectedIds.size < filteredTransactions.length;
 
   return (
-    <div className="space-y-4 sm:space-y-6">
-      {/* 1. Monthly Summary (Consolidated, Zero-Waste High-Density Layout) */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
-        {/* Primary Row: Balance & Key Financial Metrics */}
-        <div className="p-3.5 sm:p-4 bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-xs text-slate-300 font-bold">
-                {isYearlyUnifiedTab
-                  ? selectedMonthFilter === 'all'
-                    ? `${activeTabYear || activeSheetTitle}년 전체 잔액`
-                    : `${activeTabYear || activeSheetTitle}년 ${selectedMonthFilter}월 잔액`
-                  : `${activeSheetTitle} 잔액`}
-              </span>
-              <span className="text-[10px] font-semibold text-slate-400 tabular-nums">
-                ({metrics.count.toLocaleString('ko-KR')}건)
-              </span>
-            </div>
-            <div
-              className={`text-xl sm:text-2xl font-black mt-0.5 tracking-tight tabular-nums ${
-                metrics.balance >= 0 ? 'text-emerald-400' : 'text-rose-400'
-              }`}
-            >
-              {metrics.balance >= 0 ? '+' : ''}
-              {metrics.balance.toLocaleString('ko-KR')}
-              <span className="text-xs font-normal text-slate-300 ml-1">원</span>
-            </div>
-          </div>
+    <div className="space-y-4">
+      {/* 0. Unified Continuous Year-Month Period Navigator */}
+      <div className="bg-white rounded-2xl border border-slate-200 px-3 py-2 sm:px-4 sm:py-2.5 flex items-center justify-between gap-2 relative">
+        {/* Continuous Stepper: Prev / Picker Trigger / Next */}
+        <div className="flex items-center gap-1 sm:gap-1.5" ref={periodPickerRef}>
+          <button
+            type="button"
+            onClick={goToPrevMonth}
+            disabled={!canGoPrevPeriod}
+            className="p-1.5 sm:p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 active:scale-95 transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            title={
+              selectedMonthFilter === '1' && prevYearTab
+                ? `${prevYearTab.year}년 12월로 이동`
+                : '이전 기간'
+            }
+            aria-label="이전 기간"
+          >
+            <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5" />
+          </button>
 
-          <div className="flex items-center gap-2 sm:gap-3 text-right shrink-0">
-            <div className="hidden xs:block">
-              <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium">일 평균 지출</span>
-              <span className="text-xs sm:text-sm font-bold text-slate-200 tabular-nums">
-                {metrics.dailyAverageExpense.toLocaleString('ko-KR')}원
-              </span>
+          <button
+            type="button"
+            onClick={() => setIsPeriodPickerOpen((prev) => !prev)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl hover:bg-slate-100 text-slate-900 transition cursor-pointer"
+            title="클릭하여 연도 및 월 빠르게 선택"
+          >
+            <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
+            <span className="text-sm sm:text-base font-black tracking-tight tabular-nums whitespace-nowrap">
+              {activePeriodLabel}
+            </span>
+            <ChevronDown
+              className={`w-4 h-4 text-slate-400 transition-transform duration-150 ${
+                isPeriodPickerOpen ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+
+          <button
+            type="button"
+            onClick={goToNextMonth}
+            disabled={!canGoNextPeriod}
+            className="p-1.5 sm:p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 active:scale-95 transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+            title={
+              selectedMonthFilter === '12' && nextYearTab
+                ? `${nextYearTab.year}년 1월로 이동`
+                : '다음 기간'
+            }
+            aria-label="다음 기간"
+          >
+            <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5" />
+          </button>
+
+          {/* Year + 12-Month Calendar Popover */}
+          {isPeriodPickerOpen && (
+            <div className="absolute left-3 sm:left-4 top-full mt-2 w-[300px] sm:w-[320px] bg-white rounded-2xl shadow-xl border border-slate-200 p-3.5 z-40 animate-in fade-in zoom-in-95 duration-150">
+              {/* Year Switch Row inside Popover */}
+              <div className="flex items-center justify-between pb-2.5 mb-2.5 border-b border-slate-100">
+                <button
+                  type="button"
+                  disabled={!prevYearTab}
+                  onClick={() => {
+                    if (prevYearTab) {
+                      switchToYearTabWithMonth(prevYearTab.title, selectedMonthFilter);
+                    }
+                  }}
+                  className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition cursor-pointer disabled:opacity-25 disabled:cursor-not-allowed"
+                  title={prevYearTab ? `${prevYearTab.year}년 시트로 전환` : '이전 연도 시트 없음'}
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+
+                <div className="flex items-center gap-1.5 flex-wrap justify-center">
+                  {availableYearTabs.length > 1 ? (
+                    availableYearTabs.map((yt) => {
+                      const isCurYear = yt.year === currentYearNum;
+                      return (
+                        <button
+                          key={yt.id}
+                          type="button"
+                          onClick={() => {
+                            if (!isCurYear) {
+                              switchToYearTabWithMonth(yt.title, selectedMonthFilter);
+                            }
+                          }}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-bold transition cursor-pointer tabular-nums ${
+                            isCurYear
+                              ? 'bg-slate-900 text-white'
+                              : 'text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          {yt.year}년
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <span className="text-sm font-black text-slate-900 tabular-nums">
+                      {currentYearNum}년
+                    </span>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  disabled={!nextYearTab}
+                  onClick={() => {
+                    if (nextYearTab) {
+                      switchToYearTabWithMonth(nextYearTab.title, selectedMonthFilter);
+                    }
+                  }}
+                  className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition cursor-pointer disabled:opacity-25 disabled:cursor-not-allowed"
+                  title={nextYearTab ? `${nextYearTab.year}년 시트로 전환` : '다음 연도 시트 없음'}
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* 4x3 Month Grid */}
+              <div className="grid grid-cols-4 gap-1.5">
+                {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => {
+                  const count = monthCountsMap[m] || 0;
+                  const isSelected = selectedMonthFilter === String(m);
+                  const isCurrentCalendarMonth =
+                    currentYearNum === new Date().getFullYear() &&
+                    m === new Date().getMonth() + 1;
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => {
+                        setSelectedMonthFilter(String(m));
+                        if (onSelectSheetTab && !isYearlyUnifiedTab) {
+                          onSelectSheetTab(`${m}월`);
+                        }
+                        setIsPeriodPickerOpen(false);
+                      }}
+                      className={`py-2 px-1 rounded-xl text-center transition cursor-pointer flex flex-col items-center justify-center border ${
+                        isSelected
+                          ? 'bg-blue-600 text-white border-blue-600 font-bold'
+                          : isCurrentCalendarMonth
+                          ? 'bg-blue-50/70 text-blue-700 border-blue-200 hover:bg-blue-100 font-bold'
+                          : count > 0
+                          ? 'bg-white text-slate-800 border-slate-200 hover:bg-slate-50 font-semibold'
+                          : 'bg-slate-50/60 text-slate-400 border-transparent hover:bg-slate-100 font-medium'
+                      }`}
+                    >
+                      <span className="text-xs tabular-nums">{m}월</span>
+                      <span
+                        className={`text-[10px] mt-0.5 tabular-nums ${
+                          isSelected
+                            ? 'text-blue-100'
+                            : count > 0
+                            ? 'text-slate-400'
+                            : 'text-slate-300'
+                        }`}
+                      >
+                        {count > 0 ? `${count}건` : '-'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Quick Footer Actions */}
+              <div className="flex items-center justify-between gap-2 pt-3 mt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={handleJumpToCurrentMonth}
+                  className="flex-1 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold transition cursor-pointer"
+                >
+                  이번 달
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedMonthFilter('all');
+                    setIsPeriodPickerOpen(false);
+                  }}
+                  className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition cursor-pointer ${
+                    selectedMonthFilter === 'all'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                  }`}
+                >
+                  {currentYearNum}년 전체 ({transactions.length})
+                </button>
+              </div>
             </div>
-            <div className="pl-2 border-l border-white/15">
-              <span className="text-[10px] sm:text-[11px] text-slate-400 block font-medium">저축/잉여율</span>
-              <span className="text-xs sm:text-sm font-black text-blue-300 tabular-nums">
-                {metrics.savingRate}%
-              </span>
-            </div>
-          </div>
+          )}
         </div>
 
+        {/* Right Quick Controls: Full Year Toggle & Today Jump */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {!isTodaySelected && (
+            <button
+              type="button"
+              onClick={handleJumpToCurrentMonth}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200/80 transition cursor-pointer whitespace-nowrap"
+            >
+              이번 달
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() =>
+              setSelectedMonthFilter((prev) =>
+                prev === 'all' ? String(new Date().getMonth() + 1) : 'all'
+              )
+            }
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap border ${
+              selectedMonthFilter === 'all'
+                ? 'bg-slate-900 text-white border-slate-900'
+                : 'bg-white hover:bg-slate-50 text-slate-600 border-slate-200'
+            }`}
+          >
+            {selectedMonthFilter === 'all' ? '월별 보기' : `${currentYearNum} 전체`}
+          </button>
+        </div>
+      </div>
+
+      {/* 1. Monthly Summary (Expense & Income + 3-Way Spending Breakdown) */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
         {/* 2 Key Pillars: 총 지출 & 총 수입 */}
-        <div className="grid grid-cols-2 divide-x divide-slate-150 bg-slate-50/80 py-2.5 px-1 sm:px-3">
+        <div className="grid grid-cols-2 divide-x divide-slate-200/80 bg-white py-3.5 px-1 sm:px-3">
           {/* 지출 (Click to open Daily Pace Comparison Graph) */}
           <div
             onClick={() => setIsDailyPaceModalOpen(true)}
-            className="px-2.5 sm:px-4 py-1 flex items-center justify-between min-w-0 cursor-pointer rounded-xl hover:bg-rose-50/80 active:scale-[0.98] transition group border border-transparent hover:border-rose-200"
+            className="px-2.5 sm:px-4 py-1 flex items-center justify-between min-w-0 cursor-pointer rounded-xl hover:bg-rose-50/70 active:scale-[0.98] transition group border border-transparent hover:border-rose-200"
             title="클릭하여 지난 달들과 일자별 지출 비교 그래프 보기 (특별 지출 제외)"
           >
             <div className="min-w-0">
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
                 <span className="text-[11px] sm:text-xs font-bold text-slate-500 group-hover:text-rose-700 truncate">
-                  {activeSheetTitle} {excludeSpecialExpense ? '일상 총 지출 (특별 제외)' : '총 지출'}
+                  {activePeriodLabel} {excludeSpecialExpense ? '일상 지출' : '총 지출'}
                 </span>
-                <span className="inline-flex items-center gap-0.5 text-[9px] font-extrabold text-rose-600 bg-rose-100 group-hover:bg-rose-200 px-1.5 py-0.5 rounded-full transition ml-0.5 shrink-0">
+                <span className="hidden xs:inline-flex items-center gap-0.5 text-[10px] font-bold text-rose-600 bg-rose-50 group-hover:bg-rose-100 px-1.5 py-0.5 rounded-md transition shrink-0">
                   <LineChart className="w-2.5 h-2.5" />
                   <span>일자별 비교</span>
                 </span>
               </div>
-              <p className="text-sm sm:text-lg font-black text-rose-600 truncate mt-0.5 tabular-nums">
-                {metrics.activeTotalExpense.toLocaleString('ko-KR')}원
+              <p className="text-lg sm:text-2xl font-black text-rose-600 truncate mt-1 tabular-nums tracking-tight">
+                {metrics.activeTotalExpense.toLocaleString('ko-KR')}
+                <span className="text-xs sm:text-sm font-semibold text-rose-400 ml-0.5">원</span>
               </p>
               {excludeSpecialExpense && metrics.specialExpense > 0 && (
                 <span className="text-[10px] font-bold text-amber-700 bg-amber-50 px-1.5 py-0.2 rounded border border-amber-200 inline-block truncate mt-0.5 tabular-nums">
@@ -1329,7 +1655,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                 </span>
               )}
             </div>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-rose-100 group-hover:bg-rose-200 text-rose-600 flex items-center justify-center shrink-0 ml-1.5 shadow-2xs transition group-hover:scale-105">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-rose-50 group-hover:bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 ml-2 transition">
               <TrendingDown className="w-4 h-4 stroke-[2.5]" />
             </div>
           </div>
@@ -1337,17 +1663,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
           {/* 수입 */}
           <div className="px-2.5 sm:px-4 py-1 flex items-center justify-between min-w-0">
             <div className="min-w-0">
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
                 <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">
-                  {activeSheetTitle} 총 수입
+                  {activePeriodLabel} 총 수입
                 </span>
               </div>
-              <p className="text-sm sm:text-lg font-black text-emerald-600 truncate mt-0.5 tabular-nums">
-                {metrics.totalIncome.toLocaleString('ko-KR')}원
+              <p className="text-lg sm:text-2xl font-black text-emerald-600 truncate mt-1 tabular-nums tracking-tight">
+                {metrics.totalIncome.toLocaleString('ko-KR')}
+                <span className="text-xs sm:text-sm font-semibold text-emerald-400 ml-0.5">원</span>
               </p>
             </div>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-emerald-100 text-emerald-600 flex items-center justify-center shrink-0 ml-1.5 shadow-2xs">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 ml-2">
               <TrendingUp className="w-4 h-4 stroke-[2.5]" />
             </div>
           </div>
@@ -1579,208 +1906,40 @@ export const Dashboard: React.FC<DashboardProps> = ({
             isCategoryRankCollapsed ? 'lg:col-span-3' : 'lg:col-span-2'
           } p-3.5 sm:p-5 bg-white rounded-2xl border-2 border-slate-200 shadow-sm flex flex-col relative transition-all duration-200 w-full max-w-full overflow-hidden`}
         >
-          {/* 1. Compact Table Header and Actions */}
+          {/* 1. Compact Table Header and Folded Search / Actions */}
           <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-200">
             <div className="flex items-center gap-2 min-w-0">
-              <h3 className="text-sm sm:text-base font-black text-slate-900 whitespace-nowrap">가계부 내역</h3>
-              <span className="text-xs font-black px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 whitespace-nowrap shrink-0">
-                {filteredTransactions.length}건
+              <h3 className="text-sm sm:text-base font-black text-slate-900 whitespace-nowrap">
+                가계부 내역
+              </h3>
+              <span className="text-xs font-bold px-2 py-0.5 rounded-lg bg-slate-100 text-slate-600 whitespace-nowrap shrink-0 tabular-nums">
+                {filteredTransactions.length.toLocaleString('ko-KR')}건
               </span>
-              {isRealGoogleConnected ? (
-                <span
-                  className="text-[10px] sm:text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1 whitespace-nowrap shrink-0"
-                  title="Google 스프레드시트 실시간 동기화 중"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                  <span>실시간 연동</span>
-                </span>
-              ) : (
-                <span className="text-[10px] font-semibold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full border border-blue-100 whitespace-nowrap shrink-0">
-                  샘플 모드
-                </span>
-              )}
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
-              {sheetTabs.length > 1 && onSelectSheetTab && (
-                <div className="flex items-center gap-1 text-xs shrink-0">
-                  <select
-                    value={activeSheetTitle}
-                    onChange={(e) => onSelectSheetTab(e.target.value)}
-                    className="px-2 py-1 bg-white border border-blue-300 rounded-lg font-black text-xs text-blue-700 shadow-2xs cursor-pointer hover:border-blue-500 whitespace-nowrap"
-                    title="시트 탭 선택"
-                  >
-                    {sheetTabs.map((tab) => (
-                      <option key={tab.id} value={tab.title}>
-                        {tab.title}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <button
-                onClick={handleExportCSV}
-                className="p-1 sm:px-2.5 sm:py-1 rounded-lg text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 transition flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
-                title="CSV로 내보내기"
-              >
-                <Download className="w-3.5 h-3.5 text-slate-600" />
-                <span className="hidden sm:inline">CSV</span>
-              </button>
-            </div>
-          </div>
-
-          {/* 2. Tight Month Quick Filter Pills Bar */}
-          <div className="py-2 flex items-center justify-between gap-1 border-b border-slate-100">
-            <div
-              ref={monthScrollContainerRef}
-              className="flex items-center gap-1 overflow-x-auto pb-0.5 scrollbar-none min-w-0 flex-1 scroll-smooth"
-            >
+              {/* Collapsible Search & Filter Toggle */}
               <button
                 type="button"
-                onClick={goToPrevMonth}
-                className="p-1 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition cursor-pointer shrink-0"
-                title="이전 달"
-              >
-                <ChevronLeft className="w-3.5 h-3.5" />
-              </button>
-
-              <button
-                ref={selectedMonthFilter === 'all' ? activeMonthBadgeRef : undefined}
-                onClick={() => setSelectedMonthFilter('all')}
-                className={`px-2 py-1 rounded-lg text-xs font-bold transition cursor-pointer shrink-0 ${
-                  selectedMonthFilter === 'all'
-                    ? 'bg-blue-600 text-white shadow-xs font-black'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                onClick={() => setIsSearchExpanded((prev) => !prev)}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition cursor-pointer border whitespace-nowrap ${
+                  isSearchExpanded || hasActiveFilters
+                    ? 'bg-blue-50 border-blue-300 text-blue-700'
+                    : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
                 }`}
+                title="검색 및 상세 필터 펼치기/접기"
               >
-                {isYearlyUnifiedTab ? `${activeTabYear || activeSheetTitle}년 전체` : '전체'} ({transactions.length})
-              </button>
-              {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => {
-                const count = transactions.filter(
-                  (t) => extractMonthFromDate(t.date, t.sheetTitle) === m
-                ).length;
-                const isSelected = selectedMonthFilter === String(m);
-                return (
-                  <button
-                    key={m}
-                    ref={isSelected ? activeMonthBadgeRef : undefined}
-                    onClick={() => {
-                      setSelectedMonthFilter(String(m));
-                      if (onSelectSheetTab && !isYearlyUnifiedTab) {
-                        onSelectSheetTab(`${m}월`);
-                      }
-                    }}
-                    className={`px-2 py-1 rounded-lg text-xs font-bold transition cursor-pointer shrink-0 ${
-                      isSelected
-                        ? 'bg-blue-600 text-white shadow-xs font-black'
-                        : count > 0
-                        ? 'bg-blue-50 text-blue-700 hover:bg-blue-100 font-extrabold'
-                        : 'bg-slate-50 text-slate-400 hover:bg-slate-100'
-                    }`}
-                  >
-                    {m}월{count > 0 ? ` (${count})` : ''}
-                  </button>
-                );
-              })}
-
-              <button
-                type="button"
-                onClick={goToNextMonth}
-                className="p-1 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition cursor-pointer shrink-0"
-                title="다음 달"
-              >
-                <ChevronRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          </div>
-
-          {/* 3. High-Efficiency Compact Search & Filters */}
-          <div className="py-2 space-y-1.5">
-            {/* Row 1: Search + Type + Sort + Selection */}
-            <div className="flex items-center gap-1.5 w-full">
-              {/* Search input with quick clear */}
-              <div className="relative flex-1 min-w-0">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="내용, 사용처, 분류 검색..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-7 pr-6 py-1.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-600 focus:bg-white transition"
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer p-0.5"
-                    title="검색어 지우기"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
+                <Search className="w-3.5 h-3.5" />
+                <span>검색</span>
+                {hasActiveFilters && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-600" aria-hidden="true" />
                 )}
-              </div>
-
-              {/* Type Filter */}
-              <select
-                value={selectedTypeFilter}
-                onChange={(e) => setSelectedTypeFilter(e.target.value as any)}
-                className={`px-2 py-1.5 border rounded-xl text-xs font-bold cursor-pointer whitespace-nowrap shrink-0 transition ${
-                  selectedTypeFilter !== 'all'
-                    ? 'bg-blue-50 border-blue-400 text-blue-800'
-                    : 'bg-white border-slate-300 text-slate-700'
-                }`}
-              >
-                <option value="all">전체 구분</option>
-                <option value="expense">지출만</option>
-                <option value="income">수입만</option>
-                <option value="transfer">이체만</option>
-              </select>
-
-              {/* Sort Order Selector */}
-              <select
-                value={
-                  sortField === 'recent'
-                    ? (sortAsc ? 'recent_asc' : 'recent_desc')
-                    : sortField === 'date'
-                    ? (sortAsc ? 'date_asc' : 'date_desc')
-                    : (sortAsc ? 'amount_asc' : 'amount_desc')
-                }
-                onChange={(e) => {
-                  const val = e.target.value;
-                  if (val === 'recent_desc') {
-                    setSortField('recent');
-                    setSortAsc(false);
-                  } else if (val === 'recent_asc') {
-                    setSortField('recent');
-                    setSortAsc(true);
-                  } else if (val === 'date_desc') {
-                    setSortField('date');
-                    setSortAsc(false);
-                  } else if (val === 'date_asc') {
-                    setSortField('date');
-                    setSortAsc(true);
-                  } else if (val === 'amount_desc') {
-                    setSortField('amount');
-                    setSortAsc(false);
-                  } else if (val === 'amount_asc') {
-                    setSortField('amount');
-                    setSortAsc(true);
-                  }
-                }}
-                className={`px-2 py-1.5 border rounded-xl text-xs font-bold cursor-pointer whitespace-nowrap shrink-0 transition ${
-                  sortField === 'date'
-                    ? 'bg-blue-50 border-blue-400 text-blue-800'
-                    : 'bg-white border-slate-300 text-slate-700'
-                }`}
-                title="정렬 기준"
-              >
-                <option value="date_desc">날짜순 (최신)</option>
-                <option value="date_asc">날짜순 (과거)</option>
-                <option value="recent_desc">최근 입력순</option>
-                <option value="amount_desc">금액 높은순</option>
-                <option value="amount_asc">금액 낮은순</option>
-              </select>
+                {isSearchExpanded ? (
+                  <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
+                ) : (
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                )}
+              </button>
 
               {/* Multi-Selection Mode Button */}
               <button
@@ -1793,151 +1952,265 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     setIsSelectionMode(true);
                   }
                 }}
-                className={`px-2.5 py-1.5 border rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 ${
+                className={`px-2.5 py-1.5 border rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 ${
                   isSelectionMode
-                    ? 'bg-blue-600 border-blue-600 text-white shadow-xs'
-                    : 'bg-white hover:bg-slate-50 border-slate-300 text-slate-700'
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
                 }`}
                 title="다중 선택 모드 (또는 내역 길게 누르기)"
               >
                 <CheckSquare className="w-3.5 h-3.5" />
-                <span>{isSelectionMode ? '선택 취소' : '선택'}</span>
+                <span>{isSelectionMode ? '취소' : '선택'}</span>
               </button>
-            </div>
 
-            {/* Row 2: Smooth Horizontal Scrollable Filter Chips (never wraps to 3rd or 4th row!) */}
-            <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-none text-xs">
-              {/* Category Filter Pill */}
-              {allCategories.length > 0 && (
-                <select
-                  value={selectedCategoryFilter}
-                  onChange={(e) => setSelectedCategoryFilter(e.target.value)}
-                  className={`px-2 py-1 border rounded-lg text-[11px] font-bold max-w-[120px] truncate cursor-pointer whitespace-nowrap shrink-0 transition ${
-                    selectedCategoryFilter !== 'all'
-                      ? 'bg-blue-600 text-white border-blue-700'
-                      : 'bg-white border-slate-200 text-slate-700'
-                  }`}
-                  title="분류별 필터"
-                >
-                  <option value="all">모든 분류</option>
-                  {allCategories.map((cat) => (
-                    <option key={cat} value={cat}>
-                      {cat}
-                    </option>
-                  ))}
-                </select>
-              )}
-
-              {/* Expenditure Type Filter Pill */}
-              <select
-                value={selectedRecurringFilter}
-                onChange={(e) => setSelectedRecurringFilter(e.target.value as any)}
-                className={`px-2 py-1 border rounded-lg text-[11px] font-bold cursor-pointer whitespace-nowrap shrink-0 transition ${
-                  selectedRecurringFilter !== 'all'
-                    ? selectedRecurringFilter === 'special'
-                      ? 'bg-amber-500 text-white border-amber-600'
-                      : selectedRecurringFilter === 'recurring'
-                      ? 'bg-purple-600 text-white border-purple-700'
-                      : selectedRecurringFilter === 'installment'
-                      ? 'bg-indigo-600 text-white border-indigo-700'
-                      : 'bg-blue-600 text-white border-blue-700'
-                    : 'bg-white border-slate-200 text-slate-700'
-                }`}
-                title="지출 형태 필터링"
-              >
-                <option value="all">모든 지출형태</option>
-                <option value="routine">🛒 일반 일상만</option>
-                <option value="recurring">📌 고정 예산만</option>
-                <option value="special">🛋️ 특별(비정기)만</option>
-                <option value="variable">변동 전체(일상+특별)</option>
-                <option value="installment">💳 할부 지출만</option>
-              </select>
-
-              {/* 1-Click Toggle: Exclude Special Expense */}
               <button
                 type="button"
-                onClick={() => setExcludeSpecialExpense((prev) => !prev)}
-                className={`px-2 py-1 border rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0 ${
-                  excludeSpecialExpense
-                    ? 'bg-amber-500 text-white border-amber-600 shadow-2xs'
-                    : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
-                }`}
-                title="대형 비정기 지출 제외"
+                onClick={handleExportCSV}
+                className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-lg text-xs font-bold text-slate-600 bg-white hover:bg-slate-50 border border-slate-200 transition flex items-center gap-1 cursor-pointer whitespace-nowrap shrink-0"
+                title="CSV로 내보내기"
               >
-                <span>🛋️ 특별 제외</span>
-                <span
-                  className={`w-5 h-2.5 rounded-full p-0.5 transition flex items-center ${
-                    excludeSpecialExpense ? 'bg-amber-800 justify-end' : 'bg-slate-300 justify-start'
-                  }`}
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-white block" />
-                </span>
+                <Download className="w-3.5 h-3.5 text-slate-500" />
+                <span className="hidden sm:inline">CSV</span>
               </button>
-
-              {/* Amount Sign Mode Toggle (₩+ 양수 통일 vs ± 부호 고정) */}
-              <button
-                type="button"
-                onClick={() => {
-                  const next = amountSignMode === 'positive' ? 'signed' : 'positive';
-                  setAmountSignMode(next);
-                  try {
-                    localStorage.setItem('smart_money_amount_sign_mode', next);
-                  } catch {}
-                }}
-                className={`px-2 py-1 border rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 ${
-                  amountSignMode === 'positive'
-                    ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100'
-                    : 'bg-indigo-50 border-indigo-300 text-indigo-800 hover:bg-indigo-100'
-                }`}
-                title="금액 표기 전환"
-              >
-                <span className="font-mono font-black text-[10px]">
-                  {amountSignMode === 'positive' ? '₩+' : '±'}
-                </span>
-                <span>{amountSignMode === 'positive' ? '양수 통일' : '부호 표기'}</span>
-              </button>
-
-              {/* Card Installment Tracker Modal Button */}
-              <button
-                type="button"
-                onClick={() => setIsInstallmentModalOpen(true)}
-                className={`px-2 py-1 border rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 ${
-                  mergedInstallmentOverview.totalCount > 0
-                    ? 'bg-indigo-50 border-indigo-300 text-indigo-800 hover:bg-indigo-100'
-                    : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                }`}
-                title="카드 할부 내역 모아보기 및 잔여 회차 관리"
-              >
-                <CreditCard className="w-3 h-3 text-indigo-600" />
-                <span>할부 현황</span>
-                {mergedInstallmentOverview.totalCount > 0 && (
-                  <span className="px-1 py-0.2 rounded bg-indigo-600 text-white text-[9px] font-black leading-none">
-                    {mergedInstallmentOverview.totalCount}
-                  </span>
-                )}
-              </button>
-
-              {/* Reset Filters Button (appears when any filter is active) */}
-              {hasActiveFilters && (
-                <button
-                  type="button"
-                  onClick={handleResetFilters}
-                  className="px-2 py-1 border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 rounded-lg text-[11px] font-black transition cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0 animate-in fade-in"
-                  title="모든 필터 초기화"
-                >
-                  <X className="w-3 h-3" />
-                  <span>필터 초기화</span>
-                </button>
-              )}
-
-              {/* Subtle User Guide Hint */}
-              {!isSelectionMode && filteredTransactions.length > 0 && (
-                <span className="text-[10px] text-slate-400 whitespace-nowrap shrink-0 ml-auto hidden md:inline">
-                  💡 내역 길게 눌러 다중선택 · 클릭하여 수정
-                </span>
-              )}
             </div>
           </div>
+
+          {/* Compact Active Filter Reminder when Search is Folded */}
+          {!isSearchExpanded && hasActiveFilters && (
+            <div className="py-2 flex items-center justify-between gap-2 border-b border-slate-100 text-xs">
+              <div className="flex items-center gap-1.5 flex-wrap min-w-0 text-slate-600">
+                <span className="font-bold text-blue-700">필터 적용 중:</span>
+                {searchQuery.trim() && (
+                  <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-800 font-medium truncate max-w-[140px]">
+                    &ldquo;{searchQuery.trim()}&rdquo;
+                  </span>
+                )}
+                {selectedTypeFilter !== 'all' && (
+                  <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium">
+                    {selectedTypeFilter === 'expense'
+                      ? '지출만'
+                      : selectedTypeFilter === 'income'
+                      ? '수입만'
+                      : '이체만'}
+                  </span>
+                )}
+                {selectedCategoryFilter !== 'all' && (
+                  <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium">
+                    {selectedCategoryFilter}
+                  </span>
+                )}
+                {selectedRecurringFilter !== 'all' && (
+                  <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-medium">
+                    지출형태 필터
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="px-2 py-0.5 rounded-md bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[11px] transition cursor-pointer shrink-0"
+              >
+                초기화
+              </button>
+            </div>
+          )}
+
+          {/* 2. Collapsible Search & Filters Panel (Folded by default) */}
+          {isSearchExpanded && (
+            <div className="py-2.5 space-y-2 border-b border-slate-100 animate-in fade-in duration-150">
+              {/* Row 1: Search + Type + Sort */}
+              <div className="flex items-center gap-1.5 w-full">
+                {/* Search input with quick clear */}
+                <div className="relative flex-1 min-w-0">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    placeholder="내용, 사용처, 분류, 메모 검색..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full pl-8 pr-7 py-1.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold text-slate-800 placeholder:text-slate-400 focus:outline-none focus:border-blue-600 focus:bg-white transition"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer p-0.5"
+                      title="검색어 지우기"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Type Filter */}
+                <select
+                  value={selectedTypeFilter}
+                  onChange={(e) => setSelectedTypeFilter(e.target.value as any)}
+                  className={`px-2 py-1.5 border rounded-xl text-xs font-bold cursor-pointer whitespace-nowrap shrink-0 transition ${
+                    selectedTypeFilter !== 'all'
+                      ? 'bg-blue-50 border-blue-400 text-blue-800'
+                      : 'bg-white border-slate-300 text-slate-700'
+                  }`}
+                >
+                  <option value="all">전체 구분</option>
+                  <option value="expense">지출만</option>
+                  <option value="income">수입만</option>
+                  <option value="transfer">이체만</option>
+                </select>
+
+                {/* Sort Order Selector */}
+                <select
+                  value={
+                    sortField === 'recent'
+                      ? (sortAsc ? 'recent_asc' : 'recent_desc')
+                      : sortField === 'date'
+                      ? (sortAsc ? 'date_asc' : 'date_desc')
+                      : (sortAsc ? 'amount_asc' : 'amount_desc')
+                  }
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === 'recent_desc') {
+                      setSortField('recent');
+                      setSortAsc(false);
+                    } else if (val === 'recent_asc') {
+                      setSortField('recent');
+                      setSortAsc(true);
+                    } else if (val === 'date_desc') {
+                      setSortField('date');
+                      setSortAsc(false);
+                    } else if (val === 'date_asc') {
+                      setSortField('date');
+                      setSortAsc(true);
+                    } else if (val === 'amount_desc') {
+                      setSortField('amount');
+                      setSortAsc(false);
+                    } else if (val === 'amount_asc') {
+                      setSortField('amount');
+                      setSortAsc(true);
+                    }
+                  }}
+                  className={`px-2 py-1.5 border rounded-xl text-xs font-bold cursor-pointer whitespace-nowrap shrink-0 transition ${
+                    sortField === 'date'
+                      ? 'bg-blue-50 border-blue-400 text-blue-800'
+                      : 'bg-white border-slate-300 text-slate-700'
+                  }`}
+                  title="정렬 기준"
+                >
+                  <option value="date_desc">날짜순 (최신)</option>
+                  <option value="date_asc">날짜순 (과거)</option>
+                  <option value="recent_desc">최근 입력순</option>
+                  <option value="amount_desc">금액 높은순</option>
+                  <option value="amount_asc">금액 낮은순</option>
+                </select>
+              </div>
+
+              {/* Row 2: Smooth Horizontal Scrollable Filter Chips */}
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5 scrollbar-none text-xs">
+                {/* Category Filter */}
+                {allCategories.length > 0 && (
+                  <select
+                    value={selectedCategoryFilter}
+                    onChange={(e) => setSelectedCategoryFilter(e.target.value)}
+                    className={`px-2 py-1 border rounded-lg text-[11px] font-bold max-w-[120px] truncate cursor-pointer whitespace-nowrap shrink-0 transition ${
+                      selectedCategoryFilter !== 'all'
+                        ? 'bg-blue-600 text-white border-blue-700'
+                        : 'bg-white border-slate-200 text-slate-700'
+                    }`}
+                    title="분류별 필터"
+                  >
+                    <option value="all">모든 분류</option>
+                    {allCategories.map((cat) => (
+                      <option key={cat} value={cat}>
+                        {cat}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {/* Expenditure Type Filter */}
+                <select
+                  value={selectedRecurringFilter}
+                  onChange={(e) => setSelectedRecurringFilter(e.target.value as any)}
+                  className={`px-2 py-1 border rounded-lg text-[11px] font-bold cursor-pointer whitespace-nowrap shrink-0 transition ${
+                    selectedRecurringFilter !== 'all'
+                      ? selectedRecurringFilter === 'special'
+                        ? 'bg-amber-500 text-white border-amber-600'
+                        : selectedRecurringFilter === 'recurring'
+                        ? 'bg-purple-600 text-white border-purple-700'
+                        : selectedRecurringFilter === 'installment'
+                        ? 'bg-indigo-600 text-white border-indigo-700'
+                        : 'bg-blue-600 text-white border-blue-700'
+                      : 'bg-white border-slate-200 text-slate-700'
+                  }`}
+                  title="지출 형태 필터링"
+                >
+                  <option value="all">모든 지출형태</option>
+                  <option value="routine">🛒 일반 일상만</option>
+                  <option value="recurring">📌 고정 예산만</option>
+                  <option value="special">🛋️ 특별(비정기)만</option>
+                  <option value="variable">변동 전체(일상+특별)</option>
+                  <option value="installment">💳 할부 지출만</option>
+                </select>
+
+                {/* Amount Sign Mode Toggle */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = amountSignMode === 'positive' ? 'signed' : 'positive';
+                    setAmountSignMode(next);
+                    try {
+                      localStorage.setItem('smart_money_amount_sign_mode', next);
+                    } catch {}
+                  }}
+                  className={`px-2 py-1 border rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 ${
+                    amountSignMode === 'positive'
+                      ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100'
+                      : 'bg-indigo-50 border-indigo-300 text-indigo-800 hover:bg-indigo-100'
+                  }`}
+                  title="금액 표기 전환"
+                >
+                  <span className="font-mono font-black text-[10px]">
+                    {amountSignMode === 'positive' ? '₩+' : '±'}
+                  </span>
+                  <span>{amountSignMode === 'positive' ? '양수 통일' : '부호 표기'}</span>
+                </button>
+
+                {/* Card Installment Tracker Modal Button */}
+                <button
+                  type="button"
+                  onClick={() => setIsInstallmentModalOpen(true)}
+                  className={`px-2 py-1 border rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition whitespace-nowrap shrink-0 ${
+                    mergedInstallmentOverview.totalCount > 0
+                      ? 'bg-indigo-50 border-indigo-300 text-indigo-800 hover:bg-indigo-100'
+                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                  title="카드 할부 내역 모아보기 및 잔여 회차 관리"
+                >
+                  <CreditCard className="w-3 h-3 text-indigo-600" />
+                  <span>할부 현황</span>
+                  {mergedInstallmentOverview.totalCount > 0 && (
+                    <span className="px-1 py-0.2 rounded bg-indigo-600 text-white text-[9px] font-black leading-none">
+                      {mergedInstallmentOverview.totalCount}
+                    </span>
+                  )}
+                </button>
+
+                {/* Reset Filters Button */}
+                {hasActiveFilters && (
+                  <button
+                    type="button"
+                    onClick={handleResetFilters}
+                    className="px-2 py-1 border border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 rounded-lg text-[11px] font-bold transition cursor-pointer flex items-center gap-1 whitespace-nowrap shrink-0"
+                    title="모든 필터 초기화"
+                  >
+                    <X className="w-3 h-3" />
+                    <span>초기화</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Clipboard Banner if transactions were copied to clipboard */}
           {clipboardItems.length > 0 && (

@@ -385,6 +385,10 @@ export default function App() {
   const [isRegisterYearModalOpen, setIsRegisterYearModalOpen] = useState(false);
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<'sheet' | 'categories' | 'advanced'>('sheet');
+  const [requestedDashboardMonth, setRequestedDashboardMonth] = useState<{
+    month: string;
+    seq: number;
+  } | null>(null);
 
   // Multi-Year Sheets Registry state (e.g. 2026, 2025, 2024...)
   const [yearlySheets, setYearlySheets] = useState<Array<{ year: string; title: string; id: string; url?: string }>>(() => {
@@ -2906,14 +2910,14 @@ export default function App() {
                   <p className="font-semibold text-slate-900">
                     Google 로그인이 필요합니다.{' '}
                     <span className="font-normal text-slate-600">
-                      로그인하면 내 구글 시트와 실시간으로 자동 저장됩니다.
+                      로그인하면 스마트 만년 가계부 시트가 자동으로 연결됩니다.
                     </span>
                   </p>
                 ) : !isRealGoogleConnected ? (
                   <p className="font-semibold text-slate-900">
-                    연동할 구글 시트를 선택해 주세요.{' '}
+                    만년 가계부 시트 연결이 필요합니다.{' '}
                     <span className="font-normal text-slate-600">
-                      내 Google 드라이브의 가계부 시트를 선택하면 즉시 동기화됩니다.
+                      Google 드라이브의 스마트 만년 가계부 시트를 자동으로 불러옵니다.
                     </span>
                   </p>
                 ) : (
@@ -2929,30 +2933,22 @@ export default function App() {
 
             <div className="flex items-center gap-2 shrink-0">
               {!user ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={handleLogin}
-                    disabled={isLoggingIn}
-                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition cursor-pointer disabled:opacity-60"
-                  >
-                    {isLoggingIn ? '로그인 중...' : 'Google 로그인'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setIsPickerOpen(true)}
-                    className="px-2.5 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition cursor-pointer"
-                  >
-                    시트 직접 연결
-                  </button>
-                </>
+                <button
+                  type="button"
+                  onClick={handleLogin}
+                  disabled={isLoggingIn}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition cursor-pointer disabled:opacity-60"
+                >
+                  {isLoggingIn ? '로그인 중...' : 'Google 로그인'}
+                </button>
               ) : !isRealGoogleConnected ? (
                 <button
                   type="button"
-                  onClick={() => setIsPickerOpen(true)}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition cursor-pointer"
+                  onClick={handleLogin}
+                  disabled={isLoggingIn}
+                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition cursor-pointer disabled:opacity-60"
                 >
-                  구글 시트 선택
+                  {isLoggingIn ? '연결 중...' : '만년 가계부 자동 연결'}
                 </button>
               ) : (
                 <button
@@ -3104,7 +3100,20 @@ export default function App() {
           {activeTab === 'matrix' ? (
             <AnnualMatrixView
               yearData={yearData}
-              onSelectMonth={handleSelectSheetTab}
+              onSelectMonth={(monthTitle) => {
+                if (isYearlyUnifiedMode) {
+                  const mMatch = monthTitle.match(/(\d{1,2})/);
+                  if (mMatch) {
+                    setRequestedDashboardMonth({
+                      month: String(parseInt(mMatch[1], 10)),
+                      seq: Date.now(),
+                    });
+                  }
+                  setActiveTab('monthly');
+                } else {
+                  handleSelectSheetTab(monthTitle);
+                }
+              }}
               transactions={transactions}
               activeSheetTitle={activeSheetTitle}
               onEditTransaction={handleEditTransaction}
@@ -3120,6 +3129,11 @@ export default function App() {
               sheetTabs={sheetTabs}
               isRealGoogleConnected={isRealGoogleConnected}
               onFetchMonthTransactions={handleFetchMonthTransactions}
+              activeYear={activeYear}
+              yearlySheets={yearlySheets}
+              onSelectYearTab={handleSelectYearTab}
+              onSelectYearSheet={handleSelectYearSheet}
+              isLoadingYear={isLoadingData}
             />
           ) : activeTab === 'monthly' ? (
             <Dashboard
@@ -3169,6 +3183,9 @@ export default function App() {
               onFetchMonthTransactions={handleFetchMonthTransactions}
               yearData={yearData}
               isYearlyUnifiedMode={isYearlyUnifiedMode}
+              activeYear={activeYear}
+              onSelectYearTab={handleSelectYearTab}
+              requestedMonth={requestedDashboardMonth}
             />
           ) : (
             <YearComparisonView

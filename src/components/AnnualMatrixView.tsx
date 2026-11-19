@@ -20,6 +20,9 @@ import {
   Loader2,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
+  Calendar,
   Search,
 } from 'lucide-react';
 import {
@@ -36,9 +39,13 @@ import {
   formatShortDate,
 } from '../types/ledger';
 import { getPaymentGroupBadge } from '../utils/paymentGroupUtils';
-import { extractMonthNumberFromTab, extractYearFromTab } from '../services/googleSheets';
+import {
+  extractMonthNumberFromTab,
+  extractYearFromTab,
+  findAllYearTabs,
+  detectSheetLayoutMode,
+} from '../services/googleSheets';
 import { ExpenseInputForm } from './ExpenseInputForm';
-import { detectSheetLayoutMode } from '../services/googleSheets';
 
 interface AnnualMatrixViewProps {
   yearData?: YearDashboardData;
@@ -55,9 +62,14 @@ interface AnnualMatrixViewProps {
   onOpenCategoryManager?: () => void;
   spreadsheetId?: string;
   accessToken?: string | null;
-  sheetTabs?: Array<{ id: number; title: string }>;
+  sheetTabs?: Array<{ id: number; title: string; hidden?: boolean }>;
   isRealGoogleConnected?: boolean;
   onFetchMonthTransactions?: (monthNum: number) => Promise<Transaction[]>;
+  activeYear?: string;
+  yearlySheets?: Array<{ year: string; title: string; id: string }>;
+  onSelectYearTab?: (tabTitle: string) => void;
+  onSelectYearSheet?: (cfg: { year: string; title: string; id: string }) => void;
+  isLoadingYear?: boolean;
 }
 
 const CATEGORY_COLOR_PALETTE = [
@@ -235,12 +247,75 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
   sheetTabs,
   isRealGoogleConnected,
   onFetchMonthTransactions,
+  activeYear,
+  yearlySheets = [],
+  onSelectYearTab,
+  onSelectYearSheet,
+  isLoadingYear = false,
 }) => {
   const [sortField, setSortField] = useState<'total' | 'name'>('total');
   const [filterZero, setFilterZero] = useState<boolean>(true);
   const [searchCat, setSearchCat] = useState<string>('');
 
   const activeTabYear = useMemo(() => extractYearFromTab(activeSheetTitle), [activeSheetTitle]);
+
+  // Unified Year Options (perpetual file year tabs + any external linked year sheets)
+  const yearOptions = useMemo(() => {
+    const map = new Map<
+      number,
+      { year: number; tabTitle?: string; external?: { year: string; title: string; id: string } }
+    >();
+    const fileYearTabs = findAllYearTabs(sheetTabs || []);
+    fileYearTabs.forEach((yt) => {
+      map.set(yt.year, { year: yt.year, tabTitle: yt.title });
+    });
+    (yearlySheets || []).forEach((cfg) => {
+      const yNum = parseInt(cfg.year, 10);
+      if (!isNaN(yNum) && !map.has(yNum)) {
+        map.set(yNum, { year: yNum, external: cfg });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => a.year - b.year);
+  }, [sheetTabs, yearlySheets]);
+
+  const currentYearNum = useMemo(() => {
+    if (activeTabYear !== null) return activeTabYear;
+    if (activeYear) {
+      const parsed = parseInt(activeYear, 10);
+      if (!isNaN(parsed)) return parsed;
+    }
+    return new Date().getFullYear();
+  }, [activeTabYear, activeYear]);
+
+  const currentYearIdx = useMemo(
+    () => yearOptions.findIndex((opt) => opt.year === currentYearNum),
+    [yearOptions, currentYearNum]
+  );
+
+  const prevYearOption = currentYearIdx > 0 ? yearOptions[currentYearIdx - 1] : null;
+  const nextYearOption =
+    currentYearIdx >= 0 && currentYearIdx < yearOptions.length - 1
+      ? yearOptions[currentYearIdx + 1]
+      : null;
+
+  const calendarYear = new Date().getFullYear();
+  const todayYearOption = useMemo(
+    () => yearOptions.find((opt) => opt.year === calendarYear) || null,
+    [yearOptions, calendarYear]
+  );
+
+  const handleSwitchYearOption = (opt: {
+    year: number;
+    tabTitle?: string;
+    external?: { year: string; title: string; id: string };
+  }) => {
+    if (opt.year === currentYearNum) return;
+    if (opt.tabTitle && onSelectYearTab) {
+      onSelectYearTab(opt.tabTitle);
+    } else if (opt.external && onSelectYearSheet) {
+      onSelectYearSheet(opt.external);
+    }
+  };
 
   // Local storage key for persistent annual matrix month cache (scoped by year when in unified year tab)
   const storageKey = useMemo(
@@ -1075,88 +1150,142 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
         </div>
       )}
 
-      {/* Annual Overview Summary Card (Consolidated & Zero Waste) */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
-        {/* Main Row: Annual Net Balance */}
-        <div className="p-3.5 sm:p-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between gap-3">
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-xs text-slate-300 font-bold">{effectiveYearData.year} 연간 누적 잔액</span>
-              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-blue-500/30 text-blue-200">
-                연간 저축률 {savingRate}%
+      {/* Top Year Navigator Bar (Perpetual Multi-Year Browsing) */}
+      <div className="bg-white rounded-2xl border border-slate-200 px-3 py-2 sm:px-4 sm:py-2.5 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1 sm:gap-1.5 min-w-0">
+          <button
+            type="button"
+            disabled={!prevYearOption || isLoadingYear}
+            onClick={() => prevYearOption && handleSwitchYearOption(prevYearOption)}
+            className="p-1.5 sm:p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 active:scale-95 transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+            title={prevYearOption ? `${prevYearOption.year}년 보기` : '이전 연도 없음'}
+            aria-label="이전 연도"
+          >
+            <ChevronLeft className="w-4 h-4 sm:w-5 sm:h-5" />
+          </button>
+
+          {yearOptions.length > 1 ? (
+            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl overflow-x-auto scrollbar-none">
+              {yearOptions.map((opt) => {
+                const isSelected = opt.year === currentYearNum;
+                return (
+                  <button
+                    key={opt.year}
+                    type="button"
+                    disabled={isLoadingYear}
+                    onClick={() => handleSwitchYearOption(opt)}
+                    className={`px-3 py-1 rounded-lg text-xs sm:text-sm font-black transition cursor-pointer whitespace-nowrap tabular-nums ${
+                      isSelected
+                        ? 'bg-white text-slate-900 shadow-2xs'
+                        : 'text-slate-500 hover:text-slate-900'
+                    }`}
+                  >
+                    {opt.year}년
+                  </button>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 text-slate-900">
+              <Calendar className="w-4 h-4 text-blue-600 shrink-0" />
+              <span className="text-sm sm:text-base font-black tracking-tight tabular-nums">
+                {effectiveYearData.year || currentYearNum}년
               </span>
             </div>
-            <div
-              className={`text-xl sm:text-2xl font-black mt-0.5 tracking-tight ${
-                balance >= 0 ? 'text-blue-400' : 'text-rose-400'
-              }`}
-            >
-              {balance >= 0 ? '+' : ''}
-              {balance.toLocaleString('ko-KR')}
-              <span className="text-xs font-normal text-slate-300 ml-1">원</span>
-            </div>
-          </div>
+          )}
 
-          <div className="text-right text-xs shrink-0 flex items-center gap-2">
-            {onFetchMonthTransactions && (
-              <button
-                type="button"
-                onClick={handleSyncAllMonths}
-                disabled={isSyncingAllMonths}
-                className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-400 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs cursor-pointer active:scale-95"
-                title="1월부터 12월까지 구글 시트의 전체 월 탭 데이터를 모두 불러와 연간 매트릭스를 실시간 데이터로 최신화합니다."
-              >
-                {isSyncingAllMonths ? (
-                  <>
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                    <span>{syncProgress || '동기화 중...'}</span>
-                  </>
-                ) : (
-                  <>
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    <span>전체 월 데이터 동기화</span>
-                  </>
-                )}
-              </button>
-            )}
-          </div>
+          <button
+            type="button"
+            disabled={!nextYearOption || isLoadingYear}
+            onClick={() => nextYearOption && handleSwitchYearOption(nextYearOption)}
+            className="p-1.5 sm:p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 active:scale-95 transition cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+            title={nextYearOption ? `${nextYearOption.year}년 보기` : '다음 연도 없음'}
+            aria-label="다음 연도"
+          >
+            <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5" />
+          </button>
+
+          {isLoadingYear && (
+            <span className="inline-flex items-center gap-1 text-xs font-semibold text-blue-600 ml-1">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span className="hidden sm:inline">불러오는 중...</span>
+            </span>
+          )}
         </div>
 
-        {/* 2 Pillars: 연간 총 수입 vs 연간 총 지출 */}
-        <div className="grid grid-cols-2 divide-x divide-slate-150 bg-slate-50/80 py-2.5 px-1 sm:px-3">
-          {/* 총 수입 */}
-          <div className="px-2.5 sm:px-4 py-1 flex items-center justify-between min-w-0">
-            <div className="min-w-0">
-              <div className="flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">
-                  {effectiveYearData.year} 총 수입
-                </span>
-              </div>
-              <p className="text-sm sm:text-lg font-black text-emerald-600 truncate mt-0.5">
-                {effectiveYearData.totalIncome.toLocaleString('ko-KR')}원
-              </p>
-            </div>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center shrink-0 ml-1.5 shadow-2xs">
-              <TrendingUp className="w-4 h-4 stroke-[2.5]" />
-            </div>
-          </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {currentYearNum !== calendarYear && todayYearOption && (
+            <button
+              type="button"
+              onClick={() => handleSwitchYearOption(todayYearOption)}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200/80 transition cursor-pointer whitespace-nowrap"
+            >
+              올해 ({calendarYear}년)
+            </button>
+          )}
 
+          {onFetchMonthTransactions && (
+            <button
+              type="button"
+              onClick={handleSyncAllMonths}
+              disabled={isSyncingAllMonths}
+              className="px-2.5 py-1.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+              title="구글 시트의 데이터를 불러와 연간 매트릭스를 최신화합니다."
+            >
+              {isSyncingAllMonths ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                  <span>{syncProgress || '동기화 중...'}</span>
+                </>
+              ) : (
+                <>
+                  <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
+                  <span>동기화</span>
+                </>
+              )}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Annual Overview Summary Card (Expense & Income only) */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
+        <div className="grid grid-cols-2 divide-x divide-slate-200/80 bg-white py-3.5 px-1 sm:px-3">
           {/* 총 지출 */}
           <div className="px-2.5 sm:px-4 py-1 flex items-center justify-between min-w-0">
             <div className="min-w-0">
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
                 <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">
-                  {effectiveYearData.year} 총 지출
+                  {effectiveYearData.year}년 총 지출
                 </span>
               </div>
-              <p className="text-sm sm:text-lg font-black text-rose-600 truncate mt-0.5">
-                {effectiveYearData.totalExpense.toLocaleString('ko-KR')}원
+              <p className="text-lg sm:text-2xl font-black text-rose-600 truncate mt-1 tabular-nums tracking-tight">
+                {effectiveYearData.totalExpense.toLocaleString('ko-KR')}
+                <span className="text-xs sm:text-sm font-semibold text-rose-400 ml-0.5">원</span>
               </p>
             </div>
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-rose-100 text-rose-700 flex items-center justify-center shrink-0 ml-1.5 shadow-2xs">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center shrink-0 ml-2">
               <TrendingDown className="w-4 h-4 stroke-[2.5]" />
+            </div>
+          </div>
+
+          {/* 총 수입 */}
+          <div className="px-2.5 sm:px-4 py-1 flex items-center justify-between min-w-0">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                <span className="text-[11px] sm:text-xs font-bold text-slate-500 truncate">
+                  {effectiveYearData.year}년 총 수입
+                </span>
+              </div>
+              <p className="text-lg sm:text-2xl font-black text-emerald-600 truncate mt-1 tabular-nums tracking-tight">
+                {effectiveYearData.totalIncome.toLocaleString('ko-KR')}
+                <span className="text-xs sm:text-sm font-semibold text-emerald-400 ml-0.5">원</span>
+              </p>
+            </div>
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 ml-2">
+              <TrendingUp className="w-4 h-4 stroke-[2.5]" />
             </div>
           </div>
         </div>
@@ -1188,52 +1317,32 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
           <div className="flex items-center flex-wrap gap-2">
             {/* View Mode Toggle (Active when no category filters selected) */}
             {selectedCategoryFilters.length === 0 ? (
-              <>
-                <div className="flex items-center p-1 bg-slate-100 rounded-xl border border-slate-200/80">
-                  <button
-                    type="button"
-                    onClick={() => setChartViewMode('category')}
-                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
-                      chartViewMode === 'category'
-                        ? 'bg-white text-indigo-700 shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    <Tag className="w-3.5 h-3.5 shrink-0" />
-                    <span>카테고리별 보기</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setChartViewMode('spendingType')}
-                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
-                      chartViewMode === 'spendingType'
-                        ? 'bg-white text-indigo-700 shadow-2xs'
-                        : 'text-slate-600 hover:text-slate-900'
-                    }`}
-                  >
-                    <Layers className="w-3.5 h-3.5 shrink-0" />
-                    <span>고정·일반·특별 구분</span>
-                  </button>
-                </div>
-
+              <div className="flex items-center p-1 bg-slate-100 rounded-xl border border-slate-200/80">
                 <button
                   type="button"
-                  onClick={() => setShowAllCategoriesInLegend((prev) => !prev)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-black transition cursor-pointer whitespace-nowrap shrink-0 border shadow-2xs ${
-                    showAllCategoriesInLegend
-                      ? 'bg-indigo-600 text-white border-indigo-700'
-                      : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200'
+                  onClick={() => setChartViewMode('category')}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
+                    chartViewMode === 'category'
+                      ? 'bg-white text-indigo-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
-                  title="하단 카테고리 전체 목록 펼치기/접기"
                 >
-                  <Filter className="w-3.5 h-3.5 shrink-0" />
-                  <span>
-                    {showAllCategoriesInLegend
-                      ? '카테고리 접기 ▲'
-                      : `카테고리 전체보기 (${allCategoriesForLegend.length}개) ▼`}
-                  </span>
+                  <Tag className="w-3.5 h-3.5 shrink-0" />
+                  <span>카테고리별 보기</span>
                 </button>
-              </>
+                <button
+                  type="button"
+                  onClick={() => setChartViewMode('spendingType')}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold transition cursor-pointer whitespace-nowrap shrink-0 ${
+                    chartViewMode === 'spendingType'
+                      ? 'bg-white text-indigo-700 shadow-2xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5 shrink-0" />
+                  <span>고정·일반·특별 구분</span>
+                </button>
+              </div>
             ) : (
               <button
                 type="button"
@@ -1246,17 +1355,24 @@ export const AnnualMatrixView: React.FC<AnnualMatrixViewProps> = ({
               </button>
             )}
 
-            <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200/80 shrink-0 whitespace-nowrap">
-              {selectedCategoriesData ? (
-                <>선택 합계: {selectedCategoriesData.total.toLocaleString('ko-KR')}원</>
-              ) : (() => {
-                const maxVal = Math.max(...monthlyTotals, 0);
-                if (maxVal <= 0) return <>지출 집계 대기 중</>;
-                const maxIdx = monthlyTotals.indexOf(maxVal);
-                const maxMonthName = maxIdx >= 0 ? months[maxIdx] : '';
-                return <>최고 지출: {maxMonthName} ({maxVal.toLocaleString('ko-KR')}원)</>;
-              })()}
-            </span>
+            {(() => {
+              if (selectedCategoriesData) {
+                return (
+                  <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200/80 shrink-0 whitespace-nowrap tabular-nums">
+                    선택 합계: {selectedCategoriesData.total.toLocaleString('ko-KR')}원
+                  </span>
+                );
+              }
+              const maxVal = Math.max(...monthlyTotals, 0);
+              if (maxVal <= 0) return null;
+              const maxIdx = monthlyTotals.indexOf(maxVal);
+              const maxMonthName = maxIdx >= 0 ? months[maxIdx] : '';
+              return (
+                <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200/80 shrink-0 whitespace-nowrap tabular-nums">
+                  최고 지출: {maxMonthName} ({maxVal.toLocaleString('ko-KR')}원)
+                </span>
+              );
+            })()}
           </div>
         </div>
 

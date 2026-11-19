@@ -235,26 +235,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onClose();
-                      onOpenSpreadsheetPicker();
-                    }}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition cursor-pointer"
-                  >
-                    <FileSpreadsheet className="w-3.5 h-3.5" />
-                    <span>시트 변경 / 연결</span>
-                  </button>
-
                   {spreadsheetUrl && (
                     <a
                       href={spreadsheetUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-xs font-semibold transition"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold transition"
                     >
-                      <ExternalLink className="w-3.5 h-3.5 text-emerald-600" />
+                      <ExternalLink className="w-3.5 h-3.5 text-emerald-400" />
                       <span>구글 시트 원본 열기</span>
                     </a>
                   )}
@@ -267,6 +255,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   >
                     <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-blue-600' : ''}`} />
                     <span>데이터 새로고침</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onOpenSpreadsheetPicker();
+                    }}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 text-xs font-medium transition cursor-pointer ml-auto"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    <span>다른 시트 연결</span>
                   </button>
                 </div>
               </section>
